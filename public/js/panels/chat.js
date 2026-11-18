@@ -9,14 +9,14 @@ export const STARTER_QUESTIONS = Object.freeze([
 /**
  * Appends a chat bubble. Text is inserted as text nodes (never HTML).
  * @param {HTMLElement} log
- * @param {{role: 'user' | 'assistant', text: string, pending?: boolean}} message
+ * @param {{role: 'user' | 'assistant', text: string, pending?: boolean, lang?: string}} message
  */
 export function appendMessage(log, message) {
   const item = h(
     'li',
     { className: `msg msg-${message.role}${message.pending ? ' msg-pending' : ''}` },
     h('span', { className: 'visually-hidden' }, message.role === 'user' ? 'You said: ' : 'AirWise said: '),
-    h('p', null, message.text),
+    h('p', { lang: message.lang }, message.text),
   );
   log.append(item);
   item.scrollIntoView?.({ block: 'nearest' });

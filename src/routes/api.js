@@ -6,6 +6,7 @@ import {
   formatIssues,
   geocodeQuerySchema,
   profileSchema,
+  simulateRequestSchema,
 } from '../validation.js';
 
 /** Sends a 400 with field-level messages the UI can show next to inputs. */
@@ -29,13 +30,19 @@ const handle = (fn) => async (req, res, next) => {
 
 /**
  * JSON API routes.
- * @param {{advisor: ReturnType<import('../services/advisor.js').createAdvisor>, aiEnabled: boolean, model: string}} deps
+ * @param {{advisor: ReturnType<import('../services/advisor.js').createAdvisor>, aiEnabled: boolean, model: string,
+ *          fallbackModel?: string}} deps
  */
-export function createApiRouter({ advisor, aiEnabled, model }) {
+export function createApiRouter({ advisor, aiEnabled, model, fallbackModel = '' }) {
   const router = Router();
 
   router.get('/health', (_req, res) => {
-    res.json({ status: 'ok', ai: aiEnabled, model: aiEnabled ? model : null });
+    res.json({
+      status: 'ok',
+      ai: aiEnabled,
+      model: aiEnabled ? model : null,
+      fallbackModel: aiEnabled && fallbackModel ? fallbackModel : null,
+    });
   });
 
   router.get(
@@ -62,6 +69,15 @@ export function createApiRouter({ advisor, aiEnabled, model }) {
       const parsed = profileSchema.safeParse(req.body);
       if (!parsed.success) return badRequest(res, parsed.error);
       res.status(201).json({ plan: await advisor.buildPlan(parsed.data) });
+    }),
+  );
+
+  router.post(
+    '/simulate',
+    handle(async (req, res) => {
+      const parsed = simulateRequestSchema.safeParse(req.body);
+      if (!parsed.success) return badRequest(res, parsed.error);
+      res.json({ impact: await advisor.simulate(parsed.data.profile, parsed.data.actionIds) });
     }),
   );
 

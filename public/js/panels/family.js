@@ -8,9 +8,11 @@ import { meter } from './air.js';
  *
  * @param {HTMLElement} el
  * @param {object} plan
- * @param {{done: Record<string, boolean>, onToggle: (id: string, checked: boolean) => void}} options
+ * @param {{done: Record<string, boolean>, onToggle: (id: string, checked: boolean) => void,
+ *          onPrint?: () => void}} options
  */
-export function renderFamily(el, plan, { done, onToggle }) {
+export function renderFamily(el, plan, { done, onToggle, onPrint }) {
+  const lang = plan.lang?.family ?? 'en';
   const total = plan.checklist.length;
   const completed = plan.checklist.filter((t) => done[t.id]).length;
   const progressText = `${completed} of ${total} done today`;
@@ -30,7 +32,7 @@ export function renderFamily(el, plan, { done, onToggle }) {
         { for: `chk-${task.id}` },
         h('span', { className: `who who-${task.who}` }, WHO_LABELS[task.who] ?? task.who),
         h('span', { className: 'task-time' }, task.time),
-        h('span', { className: 'task-text' }, task.task),
+        h('span', { className: 'task-text', lang }, task.task),
       ),
     ),
   );
@@ -39,6 +41,12 @@ export function renderFamily(el, plan, { done, onToggle }) {
     el,
     h('h2', { className: 'panel-title' }, "Today's family checklist"),
     h('p', { className: 'hint' }, 'Tick things off as you go. Progress is saved on this device only.'),
+    onPrint &&
+      h(
+        'button',
+        { type: 'button', className: 'btn btn-secondary no-print', onclick: onPrint },
+        'Print checklist for the fridge',
+      ),
     h(
       'p',
       { className: 'progress', id: 'progress-text' },
@@ -50,7 +58,9 @@ export function renderFamily(el, plan, { done, onToggle }) {
     h(
       'ul',
       { className: 'notes' },
-      plan.healthNotes.map((n) => h('li', null, h('strong', null, `${HEALTH_LABELS[n.group] ?? n.group}: `), n.note)),
+      plan.healthNotes.map((n) =>
+        h('li', { lang }, h('strong', { lang: 'en' }, `${HEALTH_LABELS[n.group] ?? n.group}: `), n.note),
+      ),
     ),
     h(
       'p',
@@ -90,7 +100,7 @@ export function renderCommunity(el, plan, { onCopy }) {
       plan.community.map((idea) =>
         h(
           'article',
-          { className: 'action community' },
+          { className: 'action community', lang: plan.lang?.family ?? 'en' },
           h(
             'p',
             { className: 'badges' },

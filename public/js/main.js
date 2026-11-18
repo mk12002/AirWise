@@ -1,9 +1,10 @@
-import { ApiError, askAdvisor, createPlan, getHealth, searchPlaces } from './api.js';
+import { ApiError, askAdvisor, createPlan, getHealth, searchPlaces, simulateImpact } from './api.js';
 import { h, replaceChildren } from './dom.js';
 import { DEMO_PROFILE, fieldIdFor, fillForm, readProfile, validateForm } from './form.js';
 import { STARTER_QUESTIONS, appendMessage, renderSuggestions } from './panels/chat.js';
 import { renderFamily } from './panels/family.js';
-import { renderPlan } from './render.js';
+import { allActionIds } from './panels/pillars.js';
+import { renderImpactCard, renderPlan } from './render.js';
 import { loadSession, saveSession } from './storage.js';
 import { setupTabs } from './tabs.js';
 
@@ -16,13 +17,25 @@ const state = {
   plan: null,
   /** @type {Record<string, boolean>} */
   done: {},
-  /** @type {Array<{role: 'user' | 'assistant', text: string}>} */
+  /** @type {Array<{role: 'user' | 'assistant', text: string, lang?: string}>} */
   chat: [],
+  /** Action ids the family has committed to (drives the what-if impact). */
+  selected: new Set(),
+  /** Impact for `selected` when it differs from the full plan. */
+  impact: null,
   busy: false,
 };
 
 const persist = () =>
-  saveSession({ profile: state.profile, plan: state.plan, done: state.done, chat: state.chat.slice(-12) });
+  saveSession({
+    profile: state.profile,
+    plan: state.plan,
+    done: state.done,
+    chat: state.chat.slice(-12),
+    selected: [...state.selected],
+  });
+
+const SIMULATE_DEBOUNCE_MS = 250;
 
 function toast(message) {
   const el = $('toast');
@@ -141,6 +154,8 @@ async function buildPlan(profile) {
     const isNewDay = state.plan?.generatedAt?.slice(0, 10) !== plan.generatedAt.slice(0, 10);
     state.profile = profile;
     state.plan = plan;
+    state.selected = new Set(allActionIds(plan));
+    state.impact = null;
     if (isNewDay) state.done = {};
     persist();
     showPlan();
@@ -157,9 +172,65 @@ async function buildPlan(profile) {
   }
 }
 
+// --- What-if simulator -------------------------------------------------------------------
+
+let simulateTimer;
+let simulateSeq = 0;
+
+/** Recomputes impact for the chosen actions on the server (debounced, stale replies ignored). */
+function scheduleSimulate() {
+  clearTimeout(simulateTimer);
+  const everything = allActionIds(state.plan).every((id) => state.selected.has(id));
+  if (everything) {
+    state.impact = null;
+    renderImpactCard(state.plan, state.plan.impact, state.selected);
+    return;
+  }
+  renderImpactCard(state.plan, state.impact ?? state.plan.impact, state.selected, true);
+  simulateTimer = setTimeout(async () => {
+    const seq = (simulateSeq += 1);
+    try {
+      const { impact } = await simulateImpact(state.profile, [...state.selected]);
+      if (seq !== simulateSeq) return;
+      state.impact = impact;
+      renderImpactCard(state.plan, impact, state.selected);
+    } catch (error) {
+      if (seq === simulateSeq) toast(`Could not update the impact: ${error.message}`);
+    }
+  }, SIMULATE_DEBOUNCE_MS);
+}
+
+/** Updates one toggle in place so keyboard focus stays on it. */
+function syncToggle(id) {
+  const on = state.selected.has(id);
+  const button = document.querySelector(`[data-action="${id}"]`);
+  if (!button) return;
+  button.setAttribute('aria-pressed', String(on));
+  button.classList.toggle('is-on', on);
+  button.textContent = on ? '✓ In my plan' : '+ Add to my plan';
+}
+
 const handlers = {
   get done() {
     return state.done;
+  },
+  get selected() {
+    return state.selected;
+  },
+  get impact() {
+    return state.impact;
+  },
+  onSelect(id) {
+    if (state.selected.has(id)) state.selected.delete(id);
+    else state.selected.add(id);
+    syncToggle(id);
+    persist();
+    scheduleSimulate();
+  },
+  onPrint() {
+    document.body.classList.add('print-checklist');
+    window.print();
+    document.body.classList.remove('print-checklist');
   },
   onToggle(id, checked) {
     state.done[id] = checked;
@@ -200,8 +271,9 @@ async function ask(question) {
   try {
     const result = await askAdvisor(state.profile, message, history);
     pending.remove();
-    state.chat.push({ role: 'assistant', text: result.reply });
-    appendMessage(log, { role: 'assistant', text: result.reply });
+    const reply = { role: /** @type {const} */ ('assistant'), text: result.reply, lang: result.lang };
+    state.chat.push(reply);
+    appendMessage(log, reply);
     renderSuggestions($('chat-suggestions'), result.followUps?.length ? result.followUps : STARTER_QUESTIONS, ask);
     persist();
   } catch (error) {
@@ -212,7 +284,8 @@ async function ask(question) {
 
 // --- Wiring ----------------------------------------------------------------------------
 
-function init() {
+/** Wires the page and restores any saved session. Exported so tests can boot a fresh document. */
+export function init() {
   const form = /** @type {HTMLFormElement} */ ($('profile-form'));
   setupTabs(document.querySelector('[role="tablist"]'));
 
@@ -260,7 +333,12 @@ function init() {
       done: saved.done ?? {},
       chat: saved.chat ?? [],
     });
-    if (state.plan) showPlan();
+    if (state.plan) {
+      const ids = allActionIds(state.plan);
+      state.selected = new Set(Array.isArray(saved.selected) ? saved.selected.filter((id) => ids.includes(id)) : ids);
+      showPlan();
+      scheduleSimulate();
+    }
   }
 
   getHealth()

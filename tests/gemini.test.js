@@ -61,6 +61,21 @@ describe('Gemini client', () => {
     await assert.rejects(build(fakeSdk('')).generateJson(request), /empty response/);
   });
 
+  it('fails over to the fallback model on overload or a slow attempt', async () => {
+    const sdk = fakeSdk(overloaded(), '{"ok":2}');
+    const result = await build(sdk, { fallbackModel: 'gemini-backup' }).generateJson(request);
+    assert.deepEqual(result, { ok: 2 });
+    assert.deepEqual(
+      sdk.calls.map((c) => c.model),
+      ['gemini-test', 'gemini-backup'],
+    );
+    const slow = fakeSdk(Object.assign(new Error('timed out'), { name: 'TimeoutError' }), '{"ok":3}');
+    assert.deepEqual(await build(slow, { fallbackModel: 'gemini-backup' }).generateJson(request), { ok: 3 });
+    const client = build(fakeSdk('{}'), { fallbackModel: 'gemini-backup' });
+    assert.equal(client.fallbackModel, 'gemini-backup');
+    assert.equal(build(fakeSdk('{}')).fallbackModel, null);
+  });
+
   it('classifies retryable errors', () => {
     assert.equal(isRetryable({ status: 429 }), true);
     assert.equal(isRetryable(new Error('RESOURCE_EXHAUSTED: quota')), true);

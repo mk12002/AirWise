@@ -48,7 +48,7 @@ async function samplePlan(overrides = {}) {
   return { ...plan, ...overrides };
 }
 
-const noopHandlers = { done: {}, onToggle() {}, onCopy() {} };
+const noopHandlers = { done: {}, selected: new Set(), onToggle() {}, onCopy() {}, onSelect() {} };
 const $ = (id) => dom.window.document.getElementById(id);
 
 function showResults() {
@@ -145,6 +145,63 @@ describe('UI: rendering', () => {
     chat.renderSuggestions($('chat-suggestions'), ['A?', 'B?'], (q) => picked.push(q));
     $('chat-suggestions').querySelectorAll('button')[1].click();
     assert.deepEqual(picked, ['B?']);
+  });
+});
+
+describe('UI: what-if, health framing, emergency and language', () => {
+  it('lets families add or remove actions with accessible toggle buttons', async () => {
+    const plan = await samplePlan();
+    const first = plan.pillars.indoor[0].id;
+    const picked = [];
+    render.renderPlan(plan, { ...noopHandlers, selected: new Set([first]), onSelect: (id) => picked.push(id) });
+    const on = dom.window.document.querySelector(`[data-action="${first}"]`);
+    assert.equal(on.getAttribute('aria-pressed'), 'true');
+    assert.match(on.textContent, /In my plan/);
+    const off = dom.window.document.querySelector(`[data-action="${plan.pillars.swap[0].id}"]`);
+    assert.equal(off.getAttribute('aria-pressed'), 'false');
+    off.click();
+    assert.deepEqual(picked, [plan.pillars.swap[0].id]);
+    assert.match($('impact-status').textContent, /Based on the 1 of \d+ actions/);
+  });
+
+  it('shows WHO multiples, AQLI life expectancy and a pending state', async () => {
+    const plan = await samplePlan();
+    render.renderImpactCard(plan, plan.impact, new Set(['a']), true);
+    assert.match($('impact-status').textContent, /Recalculating/);
+    render.renderImpactCard(plan, plan.impact, new Set(['a']));
+    const text = $('impact-card').textContent;
+    assert.match(text, /× WHO limit/);
+    assert.match(text, /life expectancy for your child/);
+    const { lifeLabel } = await import('../public/js/panels/impact.js');
+    assert.equal(lifeLabel(8), '+8 mo');
+    assert.equal(lifeLabel(30), '+2.5 yrs');
+  });
+
+  it('renders the smog-emergency banner as an alert', async () => {
+    render.renderPlan(await samplePlan({ emergency: { steps: ['Seal a clean room', 'Wear N95'] } }), noopHandlers);
+    const banner = $('air-card').querySelector('[role="alert"]');
+    assert.match(banner.textContent, /Smog emergency/);
+    assert.equal(banner.querySelectorAll('li').length, 2);
+    render.renderPlan(await samplePlan(), noopHandlers);
+    assert.equal($('air-card').querySelector('[role="alert"]'), null);
+  });
+
+  it('marks AI text with its language for screen readers', async () => {
+    render.renderPlan(await samplePlan({ lang: { actions: 'hi', family: 'ur' } }), noopHandlers);
+    assert.equal($('panel-indoor').querySelector('.why').getAttribute('lang'), 'hi');
+    assert.equal($('panel-indoor').querySelector('.why strong').getAttribute('lang'), 'en');
+    assert.equal($('kid-card').querySelector('.kid-message').getAttribute('lang'), 'ur');
+    assert.equal($('panel-family').querySelector('.task-text').getAttribute('lang'), 'ur');
+    const msg = chat.appendMessage($('chat-log'), { role: 'assistant', text: 'नमस्ते', lang: 'hi' });
+    assert.equal(msg.querySelector('p').getAttribute('lang'), 'hi');
+  });
+
+  it('offers a print button for the checklist', async () => {
+    const plan = await samplePlan();
+    let printed = 0;
+    family.renderFamily($('panel-family'), plan, { done: {}, onToggle() {}, onPrint: () => (printed += 1) });
+    [...$('panel-family').querySelectorAll('button')].find((b) => /Print/.test(b.textContent)).click();
+    assert.equal(printed, 1);
   });
 });
 

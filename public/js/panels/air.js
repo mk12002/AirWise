@@ -22,9 +22,22 @@ const orDash = (value, unit) => (value === null || value === undefined ? '–' :
 /** Current AQI card. */
 export function renderAirCard(el, plan) {
   const { current, band, observedAt, timezone } = plan.conditions;
+  const emergency =
+    plan.emergency &&
+    h(
+      'div',
+      { className: 'emergency', role: 'alert' },
+      h('p', { className: 'emergency-title' }, 'Smog emergency: protect your family now'),
+      h(
+        'ol',
+        null,
+        plan.emergency.steps.map((step) => h('li', null, step)),
+      ),
+    );
   replaceChildren(
     el,
     h('h2', { id: 'air-title' }, `Air right now in ${plan.location.name}`),
+    emergency,
     h(
       'div',
       { className: 'aqi-row' },
@@ -61,7 +74,7 @@ export function renderKidCard(el, plan) {
     h('h2', { id: 'kid-title' }, 'Kid alert'),
     h(
       'p',
-      { className: 'kid-message' },
+      { className: 'kid-message', lang: plan.lang?.family ?? 'en' },
       h('span', { className: 'kid-emoji', 'aria-hidden': 'true' }, plan.kidAlert.emoji),
       ' ',
       plan.kidAlert.message,

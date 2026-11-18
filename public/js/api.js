@@ -49,5 +49,9 @@ export const searchPlaces = (query) => request(`/api/geocode?q=${encodeURICompon
 
 export const createPlan = (profile) => request('/api/plan', { method: 'POST', body: profile });
 
+/** What-if impact for the actions the family has chosen (pure model maths, no AI). */
+export const simulateImpact = (profile, actionIds) =>
+  request('/api/simulate', { method: 'POST', body: { profile, actionIds } });
+
 export const askAdvisor = (profile, message, history) =>
   request('/api/chat', { method: 'POST', body: { profile, message, history } });

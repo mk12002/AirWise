@@ -14,6 +14,8 @@ describe('config', () => {
     assert.equal(c.port, 8080);
     assert.equal(c.geminiApiKey, '');
     assert.equal(c.geminiModel, 'gemini-3.5-flash-lite');
+    assert.equal(c.geminiFallbackModel, 'gemini-3.1-flash-lite');
+    assert.equal(loadConfig({ GEMINI_FALLBACK_MODEL: 'none' }).geminiFallbackModel, '');
     assert.equal(c.aiThinkingLevel, 'LOW');
     assert.equal(c.rateLimitPerMinute, 20);
     assert.ok(Object.isFrozen(c));

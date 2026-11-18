@@ -18,7 +18,13 @@ export function loadConfig(env = process.env) {
     nodeEnv: env.NODE_ENV || 'development',
     geminiApiKey: (env.GEMINI_API_KEY || '').trim(),
     geminiModel: (env.GEMINI_MODEL || 'gemini-3.5-flash-lite').trim(),
-    aiTimeoutMs: positiveInt(env.AI_TIMEOUT_MS, 30_000),
+    // Tried automatically when the primary model is overloaded or slow; "none" disables it.
+    geminiFallbackModel:
+      (env.GEMINI_FALLBACK_MODEL ?? 'gemini-3.1-flash-lite').trim() === 'none'
+        ? ''
+        : (env.GEMINI_FALLBACK_MODEL ?? 'gemini-3.1-flash-lite').trim(),
+    // Total budget per AI call, split evenly between the primary and fallback attempts.
+    aiTimeoutMs: positiveInt(env.AI_TIMEOUT_MS, 40_000),
     // Empty string disables the override (for models without thinking levels).
     aiThinkingLevel: THINKING_LEVELS.has(thinking) ? thinking : '',
     airTimeoutMs: positiveInt(env.AIR_TIMEOUT_MS, 8_000),

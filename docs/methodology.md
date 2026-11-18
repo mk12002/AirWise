@@ -69,7 +69,16 @@ Each household member's day is split across micro-environments (hours per day):
 - **Cigarette equivalent** uses the Berkeley Earth rule of thumb that breathing 22 µg/m³ for 24 h is about one
   cigarette. It is a communication aid, not a toxicological equivalence.
 
-## 4. CO2e
+## 4. Health framing
+
+- **WHO multiple**: personal mean exposure ÷ 15 µg/m³ (the WHO 2021 24-hour guideline).
+- **Life expectancy if sustained**: the [Air Quality Life Index](https://aqli.epic.uchicago.edu/) estimates that
+  each sustained 1 µg/m³ of PM2.5 costs about 0.098 years of life expectancy. AirWise applies it to each member's
+  exposure reduction, with both concentrations **clamped to 5–120 µg/m³**, the range the relationship is calibrated
+  on. Extreme indoor-smoke cases (such as biomass kitchens at 300+ µg/m³) therefore never produce implausible
+  figures. It is labelled "if sustained year-round" because the AQLI describes long-term exposure, not one day.
+
+## 5. CO2e
 
 | Item                       | Factor                                                                                                  |
 | -------------------------- | ------------------------------------------------------------------------------------------------------- |
@@ -82,11 +91,14 @@ Each household member's day is split across micro-environments (hours per day):
 Moving from wood to LPG **adds** a little fossil CO2 but removes the most harmful indoor smoke. AirWise keeps such
 health-first trade-offs and labels them; it drops only actions that add CO2 with no health benefit.
 
-## 5. Whole-plan impact
+## 6. Whole-plan impact and the what-if simulator
 
 The mods of all recommended actions are merged (strongest purifier, cleanest fuel, lowest-carbon commute, and so
 on) and the model runs once more. Impacts are therefore **combined, not summed**, so overlapping actions are never
 double-counted. A second "free actions only" run shows what a family can do today without spending anything.
+
+The **what-if simulator** (`POST /api/simulate`) runs the same merge for whichever actions the family toggles on, so
+the impact card always reflects the choices they actually intend to make.
 
 ## Limitations
 

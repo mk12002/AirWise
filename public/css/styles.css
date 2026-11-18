@@ -894,7 +894,39 @@ summary {
   }
 }
 
+.btn-toggle {
+  margin-top: 0.75rem;
+  width: 100%;
+  background: var(--surface);
+  color: var(--brand-strong);
+  border-color: var(--brand);
+}
+.btn-toggle.is-on {
+  background: var(--brand);
+  color: var(--brand-contrast);
+}
+.emergency {
+  border: 2px solid var(--bad);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  margin-bottom: 1rem;
+  background: color-mix(in srgb, var(--bad) 8%, var(--surface));
+}
+.emergency-title {
+  font-weight: 800;
+  margin: 0 0 0.25rem;
+}
+.emergency ol {
+  margin: 0;
+  padding-left: 1.2rem;
+}
+
 @media print {
+  body.print-checklist main > *:not(#results),
+  body.print-checklist #results > *:not(#panel-family),
+  .no-print {
+    display: none !important;
+  }
   .site-header,
   .site-footer,
   .tabs,

@@ -70,6 +70,15 @@ export const AQI_BANDS = Object.freeze([
   },
 ]);
 
+/** Immediate protective steps shown when the AQI reaches emergency levels. */
+export const EMERGENCY_STEPS = Object.freeze([
+  'Pick one room as the clean room: close it up, run the purifier on high, and keep kids and elders there.',
+  'Postpone outdoor exercise, school walks and errands. Reschedule to the cleanest window or another day.',
+  'Wear a well-fitted N95/FFP2 for any trip outside; cloth and surgical masks do not filter smog.',
+  'Do not burn anything indoors: no incense, candles, angithi or frying without the exhaust on.',
+  'Watch for wheezing, chest tightness or breathlessness and keep reliever inhalers within reach.',
+]);
+
 /**
  * Converts a PM2.5 concentration (µg/m³) to the US AQI (0–500).
  * @param {number} pm25

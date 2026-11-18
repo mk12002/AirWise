@@ -13,6 +13,7 @@ const ai = config.geminiApiKey
   ? createGeminiClient({
       apiKey: config.geminiApiKey,
       model: config.geminiModel,
+      fallbackModel: config.geminiFallbackModel,
       timeoutMs: config.aiTimeoutMs,
       thinkingLevel: config.aiThinkingLevel,
     })

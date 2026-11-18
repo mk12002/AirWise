@@ -1,8 +1,8 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { BUDGET_TIERS, GROUPS } from '../constants.js';
+import { BUDGET_TIERS, GROUPS, HEALTH } from '../constants.js';
 import { silentLogger } from '../logger.js';
 import { PILLARS, evaluateActions, measure, mergeMods } from './actions.js';
-import { aqiBand } from './aqi.js';
+import { EMERGENCY_STEPS, aqiBand } from './aqi.js';
 import { householdCo2, householdExposure, mostVulnerable } from './exposure.js';
 import {
   TEMPLATE_COMMUNITY,
@@ -78,7 +78,13 @@ export function createAdvisor({ airData, ai = null, logger = silentLogger, cache
       ask('family', { prompt: buildFamilyPrompt(input), schema: FAMILY_RESPONSE_SCHEMA }, aiFamilyParser),
     ]);
     if (!actionsPart && !familyPart) return null;
-    return { ...familyPart, actions: actionsPart?.actions ?? [] };
+    // Record which parts are AI-written so the UI can tag their language (templates are English).
+    const language = profile.lifestyle.language ?? 'en';
+    return {
+      ...familyPart,
+      actions: actionsPart?.actions ?? [],
+      lang: { actions: actionsPart ? language : 'en', family: familyPart ? language : 'en' },
+    };
   }
 
   return {
@@ -98,6 +104,22 @@ export function createAdvisor({ airData, ai = null, logger = silentLogger, cache
       return plan;
     },
 
+    /**
+     * Recomputes whole-plan impact for the subset of actions the family commits
+     * to ("what-if"). Pure model maths on cached air data: no AI call.
+     * @param {object} profile
+     * @param {string[]} actionIds
+     */
+    async simulate(profile, actionIds) {
+      const { air, actions } = await analyse(profile);
+      const chosen = new Set(actionIds);
+      return computeImpact(
+        profile,
+        air,
+        actions.filter((a) => chosen.has(a.id)),
+      );
+    },
+
     /** Answers a follow-up question in the context of the family's live plan. */
     async chat(profile, message, history) {
       const analysis = await analyse(profile);
@@ -110,12 +132,12 @@ export function createAdvisor({ airData, ai = null, logger = silentLogger, cache
             temperature: 0.5,
           });
           const parsed = aiChatParser.parse(raw);
-          if (parsed.reply) return { ...parsed, aiGenerated: true };
+          if (parsed.reply) return { ...parsed, aiGenerated: true, lang: profile.lifestyle.language ?? 'en' };
         } catch (error) {
           logger.warn('AI chat failed; using rule-based answer', error);
         }
       }
-      return { ...templateChat(message, analysis), aiGenerated: false };
+      return { ...templateChat(message, analysis), aiGenerated: false, lang: 'en' };
     },
   };
 }
@@ -187,8 +209,33 @@ export function assemblePlan({ profile, analysis, aiPlan, model, now = new Date(
     windows,
     ...family,
     kidAlert: { emoji: band.emoji, message: kidAlert },
+    lang: aiPlan?.lang ?? { actions: 'en', family: 'en' },
+    emergency: conditions.current.aqi >= HEALTH.emergencyAqi ? { steps: [...EMERGENCY_STEPS] } : null,
     pillars: buildPillars(actions, aiPlan?.actions),
     impact: computeImpact(profile, air, actions),
+  };
+}
+
+const round1 = (value) => Math.round(value * 10) / 10;
+
+/**
+ * Health framing for one group: exposure as a multiple of the WHO 24-hour
+ * guideline, and the AQLI life-expectancy figure if the reduction were sustained.
+ */
+export function healthSummary(id, before, after) {
+  const who = HEALTH.whoDailyGuideline;
+  // AQLI is calibrated on long-run concentrations from the WHO guideline up to about 120 µg/m³;
+  // clamping keeps extreme indoor-smoke cases from producing implausible numbers.
+  const [low, high] = HEALTH.aqliRange;
+  const clamp = (v) => Math.min(high, Math.max(low, v));
+  const reduction = Math.max(0, clamp(before.meanUgM3) - clamp(after.meanUgM3));
+  return {
+    id,
+    label: GROUPS[id].label,
+    count: before.count,
+    before: { ...before, whoMultiple: round1(before.meanUgM3 / who) },
+    after: { ...after, whoMultiple: round1(after.meanUgM3 / who) },
+    lifeMonthsIfSustained: round1(reduction * HEALTH.aqliYearsPerUg * 12),
   };
 }
 
@@ -215,13 +262,7 @@ export function computeImpact(profile, air, actions) {
     focusGroup: focus,
     outdoorAvgPm25: air.avgPm25,
     indoor: { before: baseline.indoor, after: after.indoor },
-    groups: Object.entries(baseline.groups).map(([id, before]) => ({
-      id,
-      label: GROUPS[id].label,
-      count: before.count,
-      before,
-      after: after.groups[id],
-    })),
+    groups: Object.entries(baseline.groups).map(([id, before]) => healthSummary(id, before, after.groups[id])),
     dosePctReduction:
       baseline.totalDoseUg > 0
         ? Math.round(((baseline.totalDoseUg - after.totalDoseUg) / baseline.totalDoseUg) * 100)

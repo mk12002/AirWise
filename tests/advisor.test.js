@@ -54,6 +54,19 @@ describe('air data client', () => {
     assert.match(fetchImpl.calls[1], /api\.open-meteo\.com\/v1\/forecast/);
   });
 
+  it('coalesces concurrent identical requests into one upstream call', async () => {
+    const fetchImpl = fakeFetch();
+    const client = createAirDataClient({ fetchImpl, cache: new TtlCache() });
+    const results = await Promise.all([1, 2, 3].map(() => client.getConditions({ lat: 10, lon: 20 })));
+    assert.equal(fetchImpl.calls.length, 2, 'one air + one weather request');
+    assert.equal(results[0], results[2]);
+    const failing = createAirDataClient({ fetchImpl: fakeFetch(openMeteoPayloads(), { status: 500 }) });
+    await assert.rejects(
+      Promise.all([failing.getConditions({ lat: 1, lon: 1 }), failing.getConditions({ lat: 1, lon: 1 })]),
+    );
+    await assert.rejects(failing.getConditions({ lat: 1, lon: 1 }), UpstreamError, 'failures are not cached');
+  });
+
   it('wraps network failures and HTTP errors', async () => {
     const offline = createAirDataClient({
       fetchImpl: async () => {
@@ -194,6 +207,7 @@ describe('advisor', () => {
       reply: 'Go out between 14:00 and 16:00.',
       followUps: ['What about masks?'],
       aiGenerated: true,
+      lang: 'en',
     });
     assert.match(ai.calls[0].prompt, /<user_message>"When can kids play\?"<\/user_message>/);
 
@@ -216,5 +230,62 @@ describe('advisor', () => {
     assert.deepEqual(await advisor.searchPlaces('x'), []);
     const ok = createAdvisor({ airData: airData() });
     assert.equal((await ok.getConditions({ lat: 1, lon: 2 })).hourly.length, 24);
+  });
+
+  it('simulates impact for the actions the family chooses', async () => {
+    const advisor = createAdvisor({ airData: airData() });
+    const plan = await advisor.buildPlan(profile());
+    const all = Object.values(plan.pillars)
+      .flat()
+      .map((a) => a.id);
+    const full = await advisor.simulate(profile(), all);
+    assert.deepEqual(full.all, plan.impact.all);
+    const none = await advisor.simulate(profile(), []);
+    assert.equal(none.all.pctReduction, 0);
+    assert.equal(none.dosePctReduction, 0);
+    const purifierOnly = await advisor.simulate(profile(), ['bedroom_purifier', 'not_offered']);
+    assert.ok(purifierOnly.all.pctReduction > 20 && purifierOnly.all.pctReduction < full.all.pctReduction);
+  });
+
+  it('frames exposure against the WHO guideline and AQLI life expectancy', async () => {
+    const { impact } = await createAdvisor({ airData: airData() }).buildPlan(profile());
+    const child = impact.groups.find((g) => g.id === 'child');
+    assert.equal(child.before.whoMultiple, Math.round((child.before.meanUgM3 / 15) * 10) / 10);
+    assert.ok(child.after.whoMultiple < child.before.whoMultiple);
+    const clamp = (v) => Math.min(120, Math.max(5, v));
+    const expected = (clamp(child.before.meanUgM3) - clamp(child.after.meanUgM3)) * 0.098 * 12;
+    assert.ok(Math.abs(child.lifeMonthsIfSustained - expected) < 0.1);
+  });
+
+  it('keeps life-expectancy figures inside the AQLI calibration range', async () => {
+    const smoky = profile({ home: { cookingFuel: 'biomass', heating: 'wood_coal' }, lifestyle: { budget: 'high' } });
+    const { impact } = await createAdvisor({ airData: airData() }).buildPlan(smoky);
+    for (const g of impact.groups) {
+      assert.ok(g.before.meanUgM3 > 120, 'extreme indoor smoke');
+      assert.ok(g.lifeMonthsIfSustained <= 115 * 0.098 * 12 + 0.1);
+    }
+  });
+
+  it('switches to smog-emergency mode at hazardous AQI', async () => {
+    const payloads = openMeteoPayloads();
+    payloads.air.current.us_aqi = 420;
+    const severe = createAdvisor({ airData: createAirDataClient({ fetchImpl: fakeFetch(payloads) }) });
+    const plan = await severe.buildPlan(profile());
+    assert.ok(plan.emergency.steps.length >= 4);
+    assert.equal(plan.kidAlert.emoji, '🚨');
+    const normal = await createAdvisor({ airData: airData() }).buildPlan(profile());
+    assert.equal(normal.emergency, null);
+  });
+
+  it('asks Gemini to write in the chosen language and tags which parts are translated', async () => {
+    const ai = fakeAi((req) => (req.schema.properties.actions ? new Error('down') : aiResponder(req)));
+    const hindi = profile({ lifestyle: { language: 'hi' } });
+    const plan = await createAdvisor({ airData: airData(), ai, logger: silentLogger }).buildPlan(hindi);
+    assert.match(ai.calls[0].prompt, /<output_language>Hindi<\/output_language>/);
+    assert.deepEqual(plan.lang, { actions: 'en', family: 'hi' });
+    const offline = await createAdvisor({ airData: airData() }).buildPlan(hindi);
+    assert.deepEqual(offline.lang, { actions: 'en', family: 'en' });
+    const chat = await createAdvisor({ airData: airData(), ai: fakeAi(aiResponder) }).chat(hindi, 'Masks?', []);
+    assert.equal(chat.lang, 'hi');
   });
 });

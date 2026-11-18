@@ -21,10 +21,15 @@ describe('API', () => {
     const res = await request(buildApp({ env: { GEMINI_API_KEY: 'secret-key' } }))
       .get('/api/health')
       .expect(200);
-    assert.deepEqual(res.body, { status: 'ok', ai: true, model: 'gemini-3.5-flash-lite' });
+    assert.deepEqual(res.body, {
+      status: 'ok',
+      ai: true,
+      model: 'gemini-3.5-flash-lite',
+      fallbackModel: 'gemini-3.1-flash-lite',
+    });
     assert.ok(!JSON.stringify(res.body).includes('secret-key'));
     const off = await request(buildApp()).get('/api/health');
-    assert.deepEqual(off.body, { status: 'ok', ai: false, model: null });
+    assert.deepEqual(off.body, { status: 'ok', ai: false, model: null, fallbackModel: null });
   });
 
   it('POST /api/plan returns a full plan', async () => {
@@ -118,6 +123,21 @@ describe('API', () => {
     assert.equal(res.body.conditions.current.aqi, 165);
     await request(app).get('/api/air?lat=abc&lon=1').expect(400);
     await request(app).get('/api/air?lat=1&lon=1&x=1').expect(400);
+  });
+
+  it('POST /api/simulate recomputes impact for chosen actions', async () => {
+    const app = buildApp();
+    const res = await request(app)
+      .post('/api/simulate')
+      .send({ profile: validProfile(), actionIds: ['wet_mop', 'wet_mop', 'no_incense'] })
+      .expect(200);
+    assert.ok(res.body.impact.all.pctReduction > 0);
+    assert.equal(res.body.impact.groups.length, 3);
+    await request(app)
+      .post('/api/simulate')
+      .send({ profile: validProfile(), actionIds: ['<script>'] })
+      .expect(400);
+    await request(app).post('/api/simulate').send({ profile: validProfile() }).expect(400);
   });
 
   it('POST /api/chat answers in context', async () => {

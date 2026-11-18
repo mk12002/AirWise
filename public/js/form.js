@@ -22,6 +22,7 @@ export const DEMO_PROFILE = Object.freeze({
     outdoorExercise: 'morning',
     budget: 'medium',
     notes: 'Grandpa walks in the park at 6 am. Our daughter (8) has mild asthma and plays cricket after school.',
+    language: 'en',
   },
 });
 
@@ -64,6 +65,7 @@ export function readProfile(form, location) {
       outdoorExercise: str(form, 'outdoorExercise'),
       budget: budget?.value ?? 'low',
       notes: str(form, 'notes').trim(),
+      language: str(form, 'language'),
     },
   };
 }
@@ -134,6 +136,7 @@ export function fillForm(form, profile) {
   set('indoorSmoking', home.indoorSmoking);
   set('outdoorExercise', lifestyle.outdoorExercise);
   set('notes', lifestyle.notes ?? '');
+  set('language', lifestyle.language ?? 'en');
   const radio = /** @type {HTMLInputElement | null} */ (
     form.querySelector(`input[name="budget"][value="${lifestyle.budget}"]`)
   );

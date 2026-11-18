@@ -99,4 +99,29 @@ export const GROUPS = Object.freeze({
   elderly: { label: 'Older adult', bedroom: 9, outdoor: 1, breathing: 0.55, exerciseBreathing: 1.6 },
 });
 
+/** Languages Gemini writes plan and chat text in (BCP 47 tag → name used in the prompt). */
+export const LANGUAGES = Object.freeze({
+  en: 'English',
+  hi: 'Hindi',
+  ur: 'Urdu',
+  bn: 'Bengali',
+  pa: 'Punjabi',
+  zh: 'Simplified Chinese',
+  es: 'Spanish',
+});
+
+export const HEALTH = Object.freeze({
+  /** WHO 2021 24-hour PM2.5 guideline (µg/m³). */
+  whoDailyGuideline: 15,
+  /**
+   * Air Quality Life Index (EPIC, University of Chicago): each sustained
+   * 1 µg/m³ of PM2.5 reduces life expectancy by about 0.098 years.
+   */
+  aqliYearsPerUg: 0.098,
+  /** Concentration range (µg/m³) over which the AQLI's linear relationship is applied. */
+  aqliRange: Object.freeze([5, 120]),
+  /** AQI at or above which the plan switches to smog-emergency mode. */
+  emergencyAqi: 301,
+});
+
 export const AI_TEXT_LIMITS = Object.freeze({ short: 140, medium: 400, long: 900 });

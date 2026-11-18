@@ -84,8 +84,25 @@ export function createApp({ advisor, config, logger = createLogger() }) {
     },
     express.json({ limit: '50kb', strict: true }),
   );
+  // The what-if simulator is pure maths on cached data, so it gets a roomier budget.
+  const simulateLimiter = rateLimit({
+    windowMs: 60_000,
+    limit: config.rateLimitPerMinute * 5,
+    standardHeaders: 'draft-8',
+    legacyHeaders: false,
+    message: { error: 'Too many requests. Please wait a minute and try again.' },
+  });
   app.use(['/api/plan', '/api/chat', '/api/geocode', '/api/air'], apiLimiter);
-  app.use('/api', createApiRouter({ advisor, aiEnabled: Boolean(config.geminiApiKey), model: config.geminiModel }));
+  app.use('/api/simulate', simulateLimiter);
+  app.use(
+    '/api',
+    createApiRouter({
+      advisor,
+      aiEnabled: Boolean(config.geminiApiKey),
+      model: config.geminiModel,
+      fallbackModel: config.geminiFallbackModel,
+    }),
+  );
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));
 
   app.use(

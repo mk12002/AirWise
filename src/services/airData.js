@@ -26,6 +26,25 @@ export class UpstreamError extends Error {
  *          cache?: {get: (k: string) => any, set: (k: string, v: any) => void}}} [options]
  */
 export function createAirDataClient({ fetchImpl = fetch, timeoutMs = 8000, cache } = {}) {
+  /** In-flight requests by cache key: concurrent identical lookups share one upstream call. */
+  const inflight = new Map();
+
+  /** Cache-or-fetch with request coalescing. */
+  async function cached(key, load) {
+    const hit = cache?.get(key);
+    if (hit) return hit;
+    if (!inflight.has(key)) {
+      const promise = load()
+        .then((value) => {
+          cache?.set(key, value);
+          return value;
+        })
+        .finally(() => inflight.delete(key));
+      inflight.set(key, promise);
+    }
+    return inflight.get(key);
+  }
+
   async function getJson(url) {
     let response;
     try {
@@ -45,44 +64,37 @@ export function createAirDataClient({ fetchImpl = fetch, timeoutMs = 8000, cache
      * Current conditions plus a 24-hour hourly forecast for a coordinate.
      * @param {{lat: number, lon: number}} point
      */
-    async getConditions({ lat, lon }) {
-      const key = `air:${lat.toFixed(2)},${lon.toFixed(2)}`;
-      const cached = cache?.get(key);
-      if (cached) return cached;
-
-      const coords = `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&timezone=auto&forecast_days=2`;
-      const [air, weather] = await Promise.all([
-        getJson(
-          `${AIR_URL}?${coords}&current=pm2_5,pm10,us_aqi,nitrogen_dioxide,ozone,carbon_monoxide&hourly=pm2_5,us_aqi`,
-        ),
-        getJson(
-          `${WEATHER_URL}?${coords}&current=temperature_2m,relative_humidity_2m,wind_speed_10m&hourly=wind_speed_10m`,
-        ),
-      ]);
-      const conditions = normaliseConditions(air, weather);
-      cache?.set(key, conditions);
-      return conditions;
+    getConditions({ lat, lon }) {
+      return cached(`air:${lat.toFixed(2)},${lon.toFixed(2)}`, async () => {
+        const coords = `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&timezone=auto&forecast_days=2`;
+        const [air, weather] = await Promise.all([
+          getJson(
+            `${AIR_URL}?${coords}&current=pm2_5,pm10,us_aqi,nitrogen_dioxide,ozone,carbon_monoxide&hourly=pm2_5,us_aqi`,
+          ),
+          getJson(
+            `${WEATHER_URL}?${coords}&current=temperature_2m,relative_humidity_2m,wind_speed_10m&hourly=wind_speed_10m`,
+          ),
+        ]);
+        return normaliseConditions(air, weather);
+      });
     },
 
     /**
      * City search. Returns at most five matches with coordinates.
      * @param {string} query
      */
-    async searchPlaces(query) {
-      const key = `geo:${query.toLowerCase()}`;
-      const cached = cache?.get(key);
-      if (cached) return cached;
-      const data = await getJson(`${GEOCODE_URL}?name=${encodeURIComponent(query)}&count=5&language=en&format=json`);
-      const places = (Array.isArray(data?.results) ? data.results : []).map((place) => ({
-        name: String(place.name ?? '').slice(0, 80),
-        region: [place.admin1, place.country].filter(Boolean).join(', ').slice(0, 120),
-        countryCode: /^[A-Z]{2}$/.test(place.country_code ?? '') ? place.country_code : undefined,
-        lat: Number(place.latitude),
-        lon: Number(place.longitude),
-      }));
-      const valid = places.filter((p) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lon));
-      cache?.set(key, valid);
-      return valid;
+    searchPlaces(query) {
+      return cached(`geo:${query.toLowerCase()}`, async () => {
+        const data = await getJson(`${GEOCODE_URL}?name=${encodeURIComponent(query)}&count=5&language=en&format=json`);
+        const places = (Array.isArray(data?.results) ? data.results : []).map((place) => ({
+          name: String(place.name ?? '').slice(0, 80),
+          region: [place.admin1, place.country].filter(Boolean).join(', ').slice(0, 120),
+          countryCode: /^[A-Z]{2}$/.test(place.country_code ?? '') ? place.country_code : undefined,
+          lat: Number(place.latitude),
+          lon: Number(place.longitude),
+        }));
+        return places.filter((p) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lon));
+      });
     },
   };
 }

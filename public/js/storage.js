@@ -7,7 +7,7 @@
 
 const KEY = 'airwise.session.v1';
 
-/** @returns {{profile?: object, plan?: object, done?: Record<string, boolean>, chat?: Array} | null} */
+/** @returns {{profile?: object, plan?: object, done?: Record<string, boolean>, chat?: Array, selected?: string[]} | null} */
 export function loadSession() {
   try {
     const raw = localStorage.getItem(KEY);

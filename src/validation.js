@@ -5,6 +5,7 @@ import {
   COOKING_FUELS,
   EXERCISE_TIMES,
   HEATING,
+  LANGUAGES,
   PURIFIER_OPTIONS,
   VENTILATION,
 } from './constants.js';
@@ -62,6 +63,7 @@ export const profileSchema = z.strictObject({
     outdoorExercise: z.enum(EXERCISE_TIMES),
     budget: z.enum(BUDGET_TIERS),
     notes: cleanText(400).default(''),
+    language: z.enum(keysOf(LANGUAGES)).default('en'),
   }),
 });
 
@@ -71,6 +73,14 @@ export const coordsQuerySchema = z.strictObject({
 });
 
 export const geocodeQuerySchema = z.strictObject({ q: cleanText(80, 2) });
+
+export const simulateRequestSchema = z.strictObject({
+  profile: profileSchema,
+  actionIds: z
+    .array(z.string().regex(/^[a-z_]{2,40}$/))
+    .max(40)
+    .transform((ids) => [...new Set(ids)]),
+});
 
 export const chatRequestSchema = z.strictObject({
   profile: profileSchema,
