@@ -1,0 +1,158 @@
+import { aqiBand, pm25ToAqi } from './aqi.js';
+
+const AIR_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
+const WEATHER_URL = 'https://api.open-meteo.com/v1/forecast';
+const GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
+
+/** Hours of forecast kept for charts and timing (next 24 h from now). */
+export const FORECAST_HOURS = 24;
+
+const round1 = (value) => (Number.isFinite(value) ? Math.round(value * 10) / 10 : null);
+
+/** Error raised when the upstream air/weather provider cannot be reached. */
+export class UpstreamError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'UpstreamError';
+  }
+}
+
+/**
+ * Client for Open-Meteo's free, key-less air quality, weather and geocoding
+ * APIs (CAMS model data). `fetchImpl` is injectable so tests never hit the
+ * network; results are cached per ~1 km grid cell.
+ *
+ * @param {{fetchImpl?: typeof fetch, timeoutMs?: number,
+ *          cache?: {get: (k: string) => any, set: (k: string, v: any) => void}}} [options]
+ */
+export function createAirDataClient({ fetchImpl = fetch, timeoutMs = 8000, cache } = {}) {
+  async function getJson(url) {
+    let response;
+    try {
+      response = await fetchImpl(url, {
+        signal: AbortSignal.timeout(timeoutMs),
+        headers: { accept: 'application/json' },
+      });
+    } catch {
+      throw new UpstreamError('Air quality service is unreachable');
+    }
+    if (!response.ok) throw new UpstreamError(`Air quality service returned ${response.status}`);
+    return response.json();
+  }
+
+  return {
+    /**
+     * Current conditions plus a 24-hour hourly forecast for a coordinate.
+     * @param {{lat: number, lon: number}} point
+     */
+    async getConditions({ lat, lon }) {
+      const key = `air:${lat.toFixed(2)},${lon.toFixed(2)}`;
+      const cached = cache?.get(key);
+      if (cached) return cached;
+
+      const coords = `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&timezone=auto&forecast_days=2`;
+      const [air, weather] = await Promise.all([
+        getJson(
+          `${AIR_URL}?${coords}&current=pm2_5,pm10,us_aqi,nitrogen_dioxide,ozone,carbon_monoxide&hourly=pm2_5,us_aqi`,
+        ),
+        getJson(
+          `${WEATHER_URL}?${coords}&current=temperature_2m,relative_humidity_2m,wind_speed_10m&hourly=wind_speed_10m`,
+        ),
+      ]);
+      const conditions = normaliseConditions(air, weather);
+      cache?.set(key, conditions);
+      return conditions;
+    },
+
+    /**
+     * City search. Returns at most five matches with coordinates.
+     * @param {string} query
+     */
+    async searchPlaces(query) {
+      const key = `geo:${query.toLowerCase()}`;
+      const cached = cache?.get(key);
+      if (cached) return cached;
+      const data = await getJson(`${GEOCODE_URL}?name=${encodeURIComponent(query)}&count=5&language=en&format=json`);
+      const places = (Array.isArray(data?.results) ? data.results : []).map((place) => ({
+        name: String(place.name ?? '').slice(0, 80),
+        region: [place.admin1, place.country].filter(Boolean).join(', ').slice(0, 120),
+        countryCode: /^[A-Z]{2}$/.test(place.country_code ?? '') ? place.country_code : undefined,
+        lat: Number(place.latitude),
+        lon: Number(place.longitude),
+      }));
+      const valid = places.filter((p) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lon));
+      cache?.set(key, valid);
+      return valid;
+    },
+  };
+}
+
+/** Number or NaN; unlike `Number()`, missing values never become 0. */
+const num = (value) => (value === null || value === undefined || value === '' ? Number.NaN : Number(value));
+
+/** Aligned hourly series starting at the current local hour. */
+function extractHourly(air, weather) {
+  const nowHour = String(air.current.time ?? '').slice(0, 13);
+  const times = air.hourly?.time ?? [];
+  const wind = new Map((weather?.hourly?.time ?? []).map((t, i) => [t, weather.hourly.wind_speed_10m?.[i]]));
+  const start = Math.max(
+    0,
+    times.findIndex((t) => t.slice(0, 13) >= nowHour),
+  );
+
+  const hourly = [];
+  for (let i = start; i < times.length && hourly.length < FORECAST_HOURS; i += 1) {
+    const pm25 = num(air.hourly.pm2_5?.[i]);
+    if (!Number.isFinite(pm25)) continue;
+    const reported = num(air.hourly.us_aqi?.[i]);
+    hourly.push({
+      time: times[i],
+      hour: Number(times[i].slice(11, 13)),
+      pm25: round1(pm25),
+      aqi: Number.isFinite(reported) ? Math.round(reported) : pm25ToAqi(pm25),
+      windKmh: round1(num(wind.get(times[i]))),
+    });
+  }
+  return hourly;
+}
+
+/** Current pollutant and weather readings (null when the provider omits one). */
+function currentReadings(air, weather) {
+  const c = air.current;
+  const w = weather?.current ?? {};
+  const reportedAqi = num(c.us_aqi);
+  const aqi = Number.isFinite(reportedAqi) ? Math.round(reportedAqi) : pm25ToAqi(num(c.pm2_5));
+  return {
+    aqi,
+    band: aqiBand(aqi).id,
+    pm25: round1(num(c.pm2_5)),
+    pm10: round1(num(c.pm10)),
+    no2: round1(num(c.nitrogen_dioxide)),
+    o3: round1(num(c.ozone)),
+    co: round1(num(c.carbon_monoxide)),
+    temperatureC: round1(num(w.temperature_2m)),
+    humidity: round1(num(w.relative_humidity_2m)),
+    windKmh: round1(num(w.wind_speed_10m)),
+  };
+}
+
+/**
+ * Converts the two raw Open-Meteo payloads into one compact, validated shape.
+ * Forecast hours start at the current local hour.
+ */
+export function normaliseConditions(air, weather) {
+  if (!Number.isFinite(num(air?.current?.pm2_5))) {
+    throw new UpstreamError('Air quality data is unavailable for this location');
+  }
+  const hourly = extractHourly(air, weather);
+  if (hourly.length === 0) throw new UpstreamError('Air quality forecast is unavailable for this location');
+
+  return {
+    source: 'open-meteo',
+    timezone: String(air.timezone ?? 'UTC'),
+    observedAt: String(air.current.time),
+    current: currentReadings(air, weather),
+    avgPm25: round1(hourly.reduce((sum, h) => sum + h.pm25, 0) / hourly.length),
+    hourly,
+  };
+}

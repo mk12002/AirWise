@@ -1,0 +1,53 @@
+{
+  "name": "airwise",
+  "version": "1.0.0",
+  "description": "Gemini-powered assistant that helps families navigate winter smog: live AQI, best hours to go outside, budget-tiered indoor air hacks, cleaner swaps and quantified impact.",
+  "type": "module",
+  "main": "server.js",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "dev": "node --watch --env-file-if-exists=.env server.js",
+    "test": "node --test --test-reporter=spec \"tests/**/*.test.js\"",
+    "test:coverage": "node --test --experimental-test-coverage --test-coverage-exclude=\"tests/**\" --test-coverage-lines=90 --test-coverage-branches=80 --test-coverage-functions=90 \"tests/**/*.test.js\"",
+    "lint": "eslint .",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "audit": "npm audit --omit=dev --audit-level=moderate",
+    "typecheck": "tsc -p tsconfig.json",
+    "check": "npm run lint && npm run format:check && npm run typecheck && npm run test:coverage && npm run audit"
+  },
+  "keywords": [
+    "gemini",
+    "generative-ai",
+    "air-quality",
+    "aqi",
+    "smog",
+    "pm2.5",
+    "promptwars"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@google/genai": "^2.32.0",
+    "compression": "^1.8.2",
+    "express": "^5.3.0",
+    "express-rate-limit": "^8.7.4",
+    "helmet": "^8.3.0",
+    "zod": "^4.6.7"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@types/compression": "^1.8.1",
+    "@types/express": "^5.0.6",
+    "@types/node": "^22.20.5",
+    "axe-core": "^4.14.1",
+    "eslint": "^10.15.0",
+    "globals": "^17.14.0",
+    "jsdom": "^27.4.0",
+    "prettier": "^3.10.1",
+    "supertest": "^7.3.2",
+    "typescript": "^5.9.3"
+  }
+}
