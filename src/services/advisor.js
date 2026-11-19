@@ -2,6 +2,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { BUDGET_TIERS, GROUPS, HEALTH } from '../constants.js';
 import { silentLogger } from '../logger.js';
 import { PILLARS, evaluateActions, measure, mergeMods } from './actions.js';
+import { normaliseConditions } from './airData.js';
 import { EMERGENCY_STEPS, aqiBand } from './aqi.js';
 import { householdCo2, householdExposure, mostVulnerable } from './exposure.js';
 import {
@@ -38,9 +39,14 @@ const PRIORITY_ORDER = { high: 0, medium: 1, low: 2 };
  *          cache?: import('./cache.js').TtlCache}} deps
  */
 export function createAdvisor({ airData, ai = null, logger = silentLogger, cache }) {
-  /** Shared analysis for plan and chat. */
-  async function analyse(profile) {
-    const conditions = await airData.getConditions(profile.location);
+  /**
+   * Shared analysis for plan, what-if and chat. `liveAir` is browser-fetched
+   * Open-Meteo data, used only when the server's own upstream call was refused.
+   */
+  async function analyse(profile, liveAir) {
+    const conditions = liveAir
+      ? { ...normaliseConditions(liveAir.air, liveAir.weather), source: 'open-meteo-browser' }
+      : await airData.getConditions(profile.location);
     const windows = findWindows(conditions.hourly);
     const air = {
       avgPm25: conditions.avgPm25,
@@ -92,16 +98,21 @@ export function createAdvisor({ airData, ai = null, logger = silentLogger, cache
     searchPlaces: (query) => airData.searchPlaces(query),
     reversePlace: (point) => airData.reversePlace(point),
 
-    /** Builds the full personalised plan for a validated profile. */
-    async buildPlan(profile) {
-      const analysis = await analyse(profile);
-      const key = `plan:${digest(profile)}:${analysis.conditions.observedAt}`;
-      const cached = cache?.get(key);
+    /**
+     * Builds the full personalised plan for a validated profile.
+     * @param {object} profile
+     * @param {{liveAir?: object}} [options]
+     */
+    async buildPlan(profile, { liveAir } = {}) {
+      const analysis = await analyse(profile, liveAir);
+      // Plans built from browser-supplied air data are never cached, so they can't reach other users.
+      const key = liveAir ? null : `plan:${digest(profile)}:${analysis.conditions.observedAt}`;
+      const cached = key && cache?.get(key);
       if (cached) return cached;
 
       const aiPlan = await enrichPlan(analysis, profile);
       const plan = assemblePlan({ profile, analysis, aiPlan, model: aiPlan ? ai.model : null });
-      cache?.set(key, plan);
+      if (key) cache?.set(key, plan);
       return plan;
     },
 
@@ -110,9 +121,10 @@ export function createAdvisor({ airData, ai = null, logger = silentLogger, cache
      * to ("what-if"). Pure model maths on cached air data: no AI call.
      * @param {object} profile
      * @param {string[]} actionIds
+     * @param {{liveAir?: object}} [options]
      */
-    async simulate(profile, actionIds) {
-      const { air, actions } = await analyse(profile);
+    async simulate(profile, actionIds, { liveAir } = {}) {
+      const { air, actions } = await analyse(profile, liveAir);
       const chosen = new Set(actionIds);
       return computeImpact(
         profile,
@@ -121,9 +133,15 @@ export function createAdvisor({ airData, ai = null, logger = silentLogger, cache
       );
     },
 
-    /** Answers a follow-up question in the context of the family's live plan. */
-    async chat(profile, message, history) {
-      const analysis = await analyse(profile);
+    /**
+     * Answers a follow-up question in the context of the family's live plan.
+     * @param {object} profile
+     * @param {string} message
+     * @param {Array<{role: string, text?: string}>} history
+     * @param {{liveAir?: object}} [options]
+     */
+    async chat(profile, message, history, { liveAir } = {}) {
+      const analysis = await analyse(profile, liveAir);
       if (ai) {
         try {
           const raw = await ai.generateJson({

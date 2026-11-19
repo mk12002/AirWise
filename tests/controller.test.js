@@ -4,7 +4,7 @@ import { after, before, describe, it } from 'node:test';
 import { JSDOM } from 'jsdom';
 import { createAdvisor } from '../src/services/advisor.js';
 import { createAirDataClient } from '../src/services/airData.js';
-import { profileSchema } from '../src/validation.js';
+import { chatRequestSchema, planRequestSchema, simulateRequestSchema } from '../src/validation.js';
 import { fakeFetch, openMeteoPayloads } from './helpers.js';
 
 /*
@@ -37,6 +37,19 @@ const advisor = createAdvisor({
 
 const requests = [];
 let failNext = null;
+/** Simulates the server's own upstream calls being refused (e.g. a rate-limited cloud IP). */
+let serverAirDown = false;
+const airDown = (status) => ({
+  ok: false,
+  status: 502,
+  json: async () => ({ error: 'Live air quality data is unavailable right now.', code: 'AIR_UNAVAILABLE', status }),
+});
+
+/** Open-Meteo responses for the browser's direct fallback fetch, by path. */
+function openMeteo(pathname) {
+  const { air, weather } = openMeteoPayloads();
+  return { '/v1/air-quality': air, '/v1/forecast': weather }[pathname];
+}
 
 /** Minimal in-process backend for the browser code. */
 async function backend(url, init = {}) {
@@ -49,6 +62,9 @@ async function backend(url, init = {}) {
     failNext = null;
     return json(failure.status, failure.body);
   }
+  const direct = openMeteo(pathname);
+  if (direct) return json(200, direct);
+  if (serverAirDown && body?.liveAir === undefined) return airDown(429);
   switch (pathname) {
     case '/api/health':
       return json(200, { status: 'ok', ai: false, model: null });
@@ -59,12 +75,18 @@ async function backend(url, init = {}) {
       });
     case '/api/geocode':
       return json(200, { places: await advisor.searchPlaces(searchParams.get('q')) });
-    case '/api/plan':
-      return json(201, { plan: await advisor.buildPlan(profileSchema.parse(body)) });
-    case '/api/simulate':
-      return json(200, { impact: await advisor.simulate(profileSchema.parse(body.profile), body.actionIds) });
-    case '/api/chat':
-      return json(200, await advisor.chat(profileSchema.parse(body.profile), body.message, body.history));
+    case '/api/plan': {
+      const { liveAir, ...profile } = planRequestSchema.parse(body);
+      return json(201, { plan: await advisor.buildPlan(profile, { liveAir }) });
+    }
+    case '/api/simulate': {
+      const req = simulateRequestSchema.parse(body);
+      return json(200, { impact: await advisor.simulate(req.profile, req.actionIds, { liveAir: req.liveAir }) });
+    }
+    case '/api/chat': {
+      const req = chatRequestSchema.parse(body);
+      return json(200, await advisor.chat(req.profile, req.message, req.history, { liveAir: req.liveAir }));
+    }
     default:
       return json(404, { error: 'Not found' });
   }
@@ -214,6 +236,22 @@ describe('controller (main.js in jsdom)', () => {
     $('profile-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
     await waitFor(() => assert.match($('form-errors').textContent, /home\.areaSqm: Too small/));
     assert.equal($('area').getAttribute('aria-invalid'), 'true');
+  });
+
+  it('fetches air data from the browser when the server is refused, and reuses it', async () => {
+    serverAirDown = true;
+    const start = requests.length;
+    $('profile-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await waitFor(() => assert.equal($('results').hidden, false));
+    const seen = requests.slice(start).map((r) => r.path);
+    assert.deepEqual(seen, ['/api/plan', '/v1/air-quality', '/v1/forecast', '/api/plan']);
+    assert.ok(requests.at(-1).body.liveAir.air.hourly, 'plan retried with browser data');
+    $('chat-input').value = 'Masks?';
+    $('chat-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await waitFor(() => assert.ok(requests.at(-1).path === '/api/chat' && requests.at(-1).body.liveAir));
+    assert.equal(requests.filter((r) => r.path === '/v1/air-quality').length, 1, 'browser data reused');
+    serverAirDown = false;
+    $('edit-btn').click();
   });
 
   it('shows upstream outages as a service problem with a retry button, not a form error', async () => {

@@ -1,4 +1,13 @@
-import { ApiError, askAdvisor, createPlan, getHealth, reversePlace, searchPlaces, simulateImpact } from './api.js';
+import {
+  ApiError,
+  askAdvisor,
+  createPlan,
+  fetchLiveAir,
+  getHealth,
+  reversePlace,
+  searchPlaces,
+  simulateImpact,
+} from './api.js';
 import { h, replaceChildren } from './dom.js';
 import { DEMO_PROFILE, fieldIdFor, fillForm, readProfile, setAreaUnit, validateForm } from './form.js';
 import { STARTER_QUESTIONS, appendMessage, renderSuggestions } from './panels/chat.js';
@@ -24,7 +33,38 @@ const state = {
   /** Impact for `selected` when it differs from the full plan. */
   impact: null,
   busy: false,
+  /** Browser-fetched air data, used only while the server can't reach the provider. */
+  liveAir: /** @type {{key: string, at: number, data: object} | null} */ (null),
 };
+
+/** Browser-fetched air data stays valid for this long (the provider updates hourly). */
+const LIVE_AIR_TTL_MS = 30 * 60_000;
+const pointKey = ({ lat, lon }) => `${lat.toFixed(2)},${lon.toFixed(2)}`;
+
+/** Fresh browser-fetched air data for this location, if any. */
+function liveAirFor(location) {
+  const live = state.liveAir;
+  return live && live.key === pointKey(location) && Date.now() - live.at < LIVE_AIR_TTL_MS ? live.data : undefined;
+}
+
+/**
+ * Calls the server; if it reports AIR_UNAVAILABLE (its upstream request was
+ * refused), fetches the open data from the browser and retries once with it.
+ * @template T
+ * @param {object} location
+ * @param {(liveAir: object | undefined) => Promise<T>} send
+ * @returns {Promise<T>}
+ */
+async function withAirFallback(location, send) {
+  try {
+    return await send(liveAirFor(location));
+  } catch (error) {
+    if (!(error instanceof ApiError && error.code === 'AIR_UNAVAILABLE')) throw error;
+    const data = await fetchLiveAir(location);
+    state.liveAir = { key: pointKey(location), at: Date.now(), data };
+    return send(data);
+  }
+}
 
 const persist = () =>
   saveSession({
@@ -170,7 +210,7 @@ async function buildPlan(profile) {
   state.busy = true;
   setView('loading');
   try {
-    const { plan } = await createPlan(profile);
+    const { plan } = await withAirFallback(profile.location, (liveAir) => createPlan(profile, liveAir));
     const isNewDay = state.plan?.generatedAt?.slice(0, 10) !== plan.generatedAt.slice(0, 10);
     state.profile = profile;
     state.plan = plan;
@@ -211,7 +251,10 @@ function scheduleSimulate() {
   simulateTimer = setTimeout(async () => {
     const seq = (simulateSeq += 1);
     try {
-      const { impact } = await simulateImpact(state.profile, [...state.selected]);
+      const { profile } = state;
+      const { impact } = await withAirFallback(profile.location, (liveAir) =>
+        simulateImpact(profile, [...state.selected], liveAir),
+      );
       if (seq !== simulateSeq) return;
       state.impact = impact;
       renderImpactCard(state.plan, impact, state.selected);
@@ -290,7 +333,8 @@ async function ask(question) {
   const pending = appendMessage(log, { role: 'assistant', text: 'Thinking…', pending: true });
   $('chat-input').value = '';
   try {
-    const result = await askAdvisor(state.profile, message, history);
+    const { profile } = state;
+    const result = await withAirFallback(profile.location, (liveAir) => askAdvisor(profile, message, history, liveAir));
     pending.remove();
     const reply = { role: /** @type {const} */ ('assistant'), text: result.reply, lang: result.lang };
     state.chat.push(reply);

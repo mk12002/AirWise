@@ -9,7 +9,7 @@ cigarette equivalents, CO2) that **Google Gemini explains in plain language**.
 Built for PromptWars Challenge 6: Urban Air Quality Assistant.
 
 [![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
-· 104 tests (incl. end-to-end controller tests) · 99.2% line / 92% branch coverage · 0 TypeScript errors · 0 axe-core WCAG 2.2 AA violations (jsdom + real Chrome, light and dark, colour contrast included) · 0 npm audit vulnerabilities
+· 108 tests (incl. end-to-end controller tests) · 99.2% line / 92% branch coverage · 0 TypeScript errors · 0 axe-core WCAG 2.2 AA violations (jsdom + real Chrome, light and dark, colour contrast included) · 0 npm audit vulnerabilities
 
 | Challenge requirement                                        | How AirWise delivers it                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -86,7 +86,10 @@ unreliable with numbers. So:
 7. **Graceful degradation**: an overloaded or slow primary model fails over to `GEMINI_FALLBACK_MODEL`. Each attempt
    gets half the time budget, so one hung call can't use up the deadline. With no key or no usable output, each part
    falls back to template text built from the same numbers. Upstream calls retry a brief blip once, and a weather
-   outage only removes wind and temperature. A real air-data outage returns a friendly 502, never a
+   outage only removes wind and temperature. If the server's own requests are refused (free cloud hosts share IP
+   addresses, which can hit the provider's per-IP limits), the server replies `502 AIR_UNAVAILABLE`, and the browser
+   fetches the same open Open-Meteo data itself and sends it along. The server validates every value, runs the same
+   model on it and never caches it. Only if both fail does the family see a friendly "try again" notice, never a
    stack trace.
 
 ### Project structure
@@ -148,7 +151,7 @@ only the wording is generic.
 npm run check   # lint + format + typecheck + tests with coverage gates + npm audit
 ```
 
-- **Testing**: 104 tests in 8 suites:
+- **Testing**: 108 tests in 8 suites:
   - **Model**: exposure physics (mass balance, purifier zones, the condition under which sealing helps), AQI
     breakpoints, forecast windows, action rules and budget filters.
   - **Advisor**: AI merge, partial and total AI failure, the what-if simulator, WHO/AQLI framing, emergency mode,
@@ -157,7 +160,7 @@ npm run check   # lint + format + typecheck + tests with coverage gates + npm au
   - **Gemini client**: retries, fallback model, timeouts.
   - **UI**: rendering, XSS, `lang` attributes, toggles and keyboard tabs in jsdom.
   - **End-to-end controller tests**: the real `index.html` and `main.js` run in jsdom against the real advisor,
-    covering search, geolocation with place naming, m²/sq ft conversion, outage retry, plan, what-if, checklist, print, copy, chat, errors and session restore.
+    covering search, geolocation with place naming, m²/sq ft conversion, outage retry, the browser air-data fallback, plan, what-if, checklist, print, copy, chat, errors and session restore.
 
   Coverage gates are 95% lines, 85% branches and 95% functions; current figures are 99.2%, 92% and 98%.
 

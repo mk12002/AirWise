@@ -295,6 +295,25 @@ describe('advisor', () => {
     assert.equal((await ok.getConditions({ lat: 1, lon: 2 })).hourly.length, 24);
   });
 
+  it('uses browser-fetched air data when the server is refused, without caching it', async () => {
+    const refused = createAirDataClient({
+      fetchImpl: fakeFetch(openMeteoPayloads(), { status: 429 }),
+      retryDelayMs: 0,
+    });
+    const cache = new TtlCache();
+    const advisor = createAdvisor({ airData: refused, cache });
+    await assert.rejects(advisor.buildPlan(profile()), UpstreamError);
+    const { air, weather } = openMeteoPayloads();
+    const plan = await advisor.buildPlan(profile(), { liveAir: { air, weather } });
+    assert.equal(plan.conditions.source, 'open-meteo-browser');
+    assert.equal(plan.conditions.hourly.length, 24);
+    assert.equal(cache.size, 0, 'never cached for other users');
+    const impact = await advisor.simulate(profile(), [], { liveAir: { air } });
+    assert.equal(impact.all.pctReduction, 0, 'no actions chosen');
+    const answer = await advisor.chat(profile(), 'When can kids play?', [], { liveAir: { air } });
+    assert.ok(answer.reply);
+  });
+
   it('simulates impact for the actions the family chooses', async () => {
     const advisor = createAdvisor({ airData: airData() });
     const plan = await advisor.buildPlan(profile());

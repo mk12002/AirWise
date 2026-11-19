@@ -93,6 +93,39 @@ describe('API', () => {
       .send(validProfile())
       .expect(502);
     assert.match(res.body.error, /Live air quality data is unavailable/);
+    assert.equal(res.body.code, 'AIR_UNAVAILABLE');
+  });
+
+  it('builds a plan from browser-fetched air data when the server is refused, and logs why', async () => {
+    const warnings = [];
+    const app = createApp({
+      advisor: createAdvisor({
+        airData: createAirDataClient({ fetchImpl: fakeFetch(openMeteoPayloads(), { status: 429 }), retryDelayMs: 0 }),
+      }),
+      config: loadConfig({ RATE_LIMIT_PER_MINUTE: '50' }),
+      logger: { ...silentLogger, warn: (message, meta) => warnings.push({ message, meta }) },
+    });
+    await request(app).post('/api/plan').send(validProfile()).expect(502);
+    assert.match(warnings[0].meta.reason, /air-quality-api\.open-meteo\.com returned 429/);
+    const { air, weather } = openMeteoPayloads();
+    const res = await request(app)
+      .post('/api/plan')
+      .send({ ...validProfile(), liveAir: { air, weather } })
+      .expect(201);
+    assert.equal(res.body.plan.conditions.source, 'open-meteo-browser');
+    await request(app)
+      .post('/api/simulate')
+      .send({ profile: validProfile(), actionIds: [], liveAir: { air } })
+      .expect(200);
+    await request(app)
+      .post('/api/chat')
+      .send({ profile: validProfile(), message: 'Masks?', liveAir: { air } })
+      .expect(200);
+    const bad = await request(app)
+      .post('/api/plan')
+      .send({ ...validProfile(), liveAir: { air: { ...air, current: { ...air.current, pm2_5: -5 } } } })
+      .expect(400);
+    assert.match(bad.body.details[0].field, /^liveAir\.air\.current\.pm2_5/);
   });
 
   it('hides unexpected errors behind a generic 500', async () => {

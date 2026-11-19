@@ -81,9 +81,9 @@ export function createAirDataClient({
         headers: { accept: 'application/json', ...headers },
       });
     } catch {
-      throw new UpstreamError('Air quality service is unreachable');
+      throw new UpstreamError(`${new URL(url).host} is unreachable`);
     }
-    if (!response.ok) throw new UpstreamError(`Air quality service returned ${response.status}`);
+    if (!response.ok) throw new UpstreamError(`${new URL(url).host} returned ${response.status}`);
     return response.json();
   }
 

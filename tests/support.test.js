@@ -5,8 +5,8 @@ import { createLogger, silentLogger } from '../src/logger.js';
 import { TtlCache } from '../src/services/cache.js';
 import { templateChecklist, templateHealthNotes, templateWhy } from '../src/services/fallback.js';
 import { describeActions, describeProfile } from '../src/services/prompts.js';
-import { chatRequestSchema, profileSchema } from '../src/validation.js';
-import { validProfile } from './helpers.js';
+import { chatRequestSchema, liveAirSchema, profileSchema } from '../src/validation.js';
+import { openMeteoPayloads, validProfile } from './helpers.js';
 
 describe('config', () => {
   it('uses safe defaults', () => {
@@ -69,6 +69,22 @@ describe('TtlCache', () => {
 });
 
 describe('validation', () => {
+  it('accepts browser-fetched Open-Meteo data, bounds every value and strips extras', () => {
+    const { air, weather } = openMeteoPayloads();
+    const parsed = liveAirSchema.parse({
+      air: { ...air, latitude: 1, current: { ...air.current, extra: 'x' } },
+      weather,
+    });
+    assert.equal(parsed.air.latitude, undefined);
+    assert.equal(parsed.air.current.extra, undefined);
+    assert.equal(parsed.air.hourly.pm2_5.length, 48);
+    assert.ok(liveAirSchema.safeParse({ air, weather: null }).success, 'weather is optional');
+    const bad = (patch) => liveAirSchema.safeParse({ air: { ...air, ...patch } }).success;
+    assert.equal(bad({ current: { ...air.current, pm2_5: 99999 } }), false);
+    assert.equal(bad({ current: { ...air.current, time: '<script>' } }), false);
+    assert.equal(bad({ hourly: { ...air.hourly, pm2_5: Array(97).fill(1) } }), false);
+  });
+
   it('strips control characters and trims text', () => {
     const p = profileSchema.parse(validProfile({ lifestyle: { notes: '  hi\u0000 there\u0007 ' } }));
     assert.equal(p.lifestyle.notes, 'hi there');

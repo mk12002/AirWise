@@ -34,7 +34,8 @@ export function createApp({ advisor, config, logger = createLogger() }) {
           'script-src': ["'self'"],
           'style-src': ["'self'"],
           'img-src': ["'self'", 'data:'],
-          'connect-src': ["'self'"],
+          // Open-Meteo is allowed so the browser can fetch open air data itself if the server is refused.
+          'connect-src': ["'self'", 'https://air-quality-api.open-meteo.com', 'https://api.open-meteo.com'],
           'object-src': ["'none'"],
           'base-uri': ["'self'"],
           'form-action': ["'self'"],
@@ -101,6 +102,7 @@ export function createApp({ advisor, config, logger = createLogger() }) {
       aiEnabled: Boolean(config.geminiApiKey),
       model: config.geminiModel,
       fallbackModel: config.geminiFallbackModel,
+      logger,
     }),
   );
   app.use('/api', (_req, res) => res.status(404).json({ error: 'Not found' }));

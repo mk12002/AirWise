@@ -74,8 +74,52 @@ export const coordsQuerySchema = z.strictObject({
 
 export const geocodeQuerySchema = z.strictObject({ q: cleanText(80, 2) });
 
+/** Nullable bounded reading, as Open-Meteo sends them. */
+const reading = (min, max) => z.number().min(min).max(max).nullable().optional();
+const hourStamp = z.string().regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}$/);
+const series = (min, max) => z.array(z.number().min(min).max(max).nullable()).max(96);
+
+/**
+ * Raw Open-Meteo payloads fetched by the browser when the server's own upstream
+ * calls are refused (shared cloud IPs can hit the provider's per-IP limits).
+ * Every value is bounded; unknown fields are stripped. The server runs the same
+ * normalisation on it and never caches or shares it with other users.
+ */
+export const liveAirSchema = z.object({
+  air: z.object({
+    timezone: z.string().max(64).optional(),
+    current: z.object({
+      time: hourStamp,
+      pm2_5: reading(0, 2000),
+      pm10: reading(0, 5000),
+      us_aqi: reading(0, 1000),
+      nitrogen_dioxide: reading(0, 5000),
+      ozone: reading(0, 5000),
+      carbon_monoxide: reading(0, 100000),
+    }),
+    hourly: z.object({ time: z.array(hourStamp).max(96), pm2_5: series(0, 2000), us_aqi: series(0, 1000) }),
+  }),
+  weather: z
+    .object({
+      current: z
+        .object({
+          temperature_2m: reading(-90, 70),
+          relative_humidity_2m: reading(0, 100),
+          wind_speed_10m: reading(0, 500),
+        })
+        .optional(),
+      hourly: z.object({ time: z.array(hourStamp).max(96), wind_speed_10m: series(0, 500) }).optional(),
+    })
+    .nullable()
+    .optional(),
+});
+
+/** POST /api/plan: the profile itself, plus optional browser-fetched air data. */
+export const planRequestSchema = profileSchema.extend({ liveAir: liveAirSchema.optional() });
+
 export const simulateRequestSchema = z.strictObject({
   profile: profileSchema,
+  liveAir: liveAirSchema.optional(),
   actionIds: z
     .array(z.string().regex(/^[a-z_]{2,40}$/))
     .max(40)
@@ -84,6 +128,7 @@ export const simulateRequestSchema = z.strictObject({
 
 export const chatRequestSchema = z.strictObject({
   profile: profileSchema,
+  liveAir: liveAirSchema.optional(),
   message: cleanText(600, 1),
   history: z
     .array(z.strictObject({ role: z.enum(['user', 'assistant']), text: cleanText(2000, 1) }))
