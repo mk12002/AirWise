@@ -55,6 +55,15 @@ export function createApiRouter({ advisor, aiEnabled, model, fallbackModel = '' 
   );
 
   router.get(
+    '/reverse-geocode',
+    handle(async (req, res) => {
+      const parsed = coordsQuerySchema.safeParse(req.query);
+      if (!parsed.success) return badRequest(res, parsed.error);
+      res.json({ place: await advisor.reversePlace(parsed.data) });
+    }),
+  );
+
+  router.get(
     '/air',
     handle(async (req, res) => {
       const parsed = coordsQuerySchema.safeParse(req.query);

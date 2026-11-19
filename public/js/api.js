@@ -47,6 +47,12 @@ export const getHealth = () => request('/api/health');
 /** @param {string} query */
 export const searchPlaces = (query) => request(`/api/geocode?q=${encodeURIComponent(query)}`);
 
+/** City-level name for a coordinate; resolves to null when it can't be named. */
+export const reversePlace = (lat, lon) =>
+  request(`/api/reverse-geocode?lat=${encodeURIComponent(lat)}&lon=${encodeURIComponent(lon)}`)
+    .then((data) => data.place ?? null)
+    .catch(() => null);
+
 export const createPlan = (profile) => request('/api/plan', { method: 'POST', body: profile });
 
 /** What-if impact for the actions the family has chosen (pure model maths, no AI). */

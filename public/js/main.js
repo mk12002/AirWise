@@ -1,6 +1,6 @@
-import { ApiError, askAdvisor, createPlan, getHealth, searchPlaces, simulateImpact } from './api.js';
+import { ApiError, askAdvisor, createPlan, getHealth, reversePlace, searchPlaces, simulateImpact } from './api.js';
 import { h, replaceChildren } from './dom.js';
-import { DEMO_PROFILE, fieldIdFor, fillForm, readProfile, validateForm } from './form.js';
+import { DEMO_PROFILE, fieldIdFor, fillForm, readProfile, setAreaUnit, validateForm } from './form.js';
 import { STARTER_QUESTIONS, appendMessage, renderSuggestions } from './panels/chat.js';
 import { renderFamily } from './panels/family.js';
 import { allActionIds } from './panels/pillars.js';
@@ -33,6 +33,7 @@ const persist = () =>
     done: state.done,
     chat: state.chat.slice(-12),
     selected: [...state.selected],
+    areaUnit: $('area-unit').value,
   });
 
 const SIMULATE_DEBOUNCE_MS = 250;
@@ -101,13 +102,14 @@ function onLocate() {
   if (!navigator.geolocation) return toast('Location is not available in this browser.');
   $('place-selected').textContent = 'Finding your location…';
   navigator.geolocation.getCurrentPosition(
-    ({ coords }) =>
-      setLocation({
-        name: 'My location',
-        region: `${coords.latitude.toFixed(2)}, ${coords.longitude.toFixed(2)}`,
-        lat: Number(coords.latitude.toFixed(4)),
-        lon: Number(coords.longitude.toFixed(4)),
-      }),
+    async ({ coords }) => {
+      const point = { lat: Number(coords.latitude.toFixed(4)), lon: Number(coords.longitude.toFixed(4)) };
+      const fallback = { name: 'My location', region: `${point.lat.toFixed(2)}, ${point.lon.toFixed(2)}`, ...point };
+      setLocation(fallback);
+      const place = await reversePlace(point.lat, point.lon);
+      // Only apply the name if the user hasn't picked another place meanwhile.
+      if (place && state.location === fallback) setLocation({ ...place, ...point });
+    },
     () => {
       setLocation(state.location);
       toast('Could not get your location. Search for your city instead.');
@@ -117,6 +119,24 @@ function onLocate() {
 }
 
 // --- Plan ------------------------------------------------------------------------------
+
+/** Shows a temporary service problem (not the family's fault) with a retry button. */
+function showServiceError(message) {
+  const box = $('form-errors');
+  for (const el of document.querySelectorAll('[aria-invalid="true"]')) el.removeAttribute('aria-invalid');
+  replaceChildren(
+    box,
+    h('p', null, h('strong', null, 'Something went wrong on our side')),
+    h('p', null, message),
+    h(
+      'button',
+      { type: 'button', className: 'btn btn-secondary', onclick: () => $('profile-form').requestSubmit() },
+      'Try again',
+    ),
+  );
+  box.hidden = false;
+  box.focus();
+}
 
 function showErrors(problems) {
   const box = $('form-errors');
@@ -166,7 +186,8 @@ async function buildPlan(profile) {
       id: fieldIdFor(d.field) ?? 'profile-form',
       message: `${d.field}: ${d.message}`,
     }));
-    showErrors(mapped.length ? mapped : [{ id: 'submit-btn', message: error.message }]);
+    if (mapped.length) showErrors(mapped);
+    else showServiceError(error.message);
   } finally {
     state.busy = false;
   }
@@ -297,6 +318,10 @@ export function init() {
     }
   });
   $('place-locate').addEventListener('click', onLocate);
+  $('area-unit').addEventListener('change', (e) => {
+    setAreaUnit(form, e.target.value);
+    persist();
+  });
   $('purifier').addEventListener('change', (e) => {
     $('cadr-field').hidden = e.target.value === 'none';
   });
@@ -324,6 +349,7 @@ export function init() {
   });
 
   const saved = loadSession();
+  if (saved?.areaUnit === 'sqft') setAreaUnit(form, 'sqft');
   if (saved?.profile) {
     fillForm(form, saved.profile);
     setLocation(saved.profile.location);

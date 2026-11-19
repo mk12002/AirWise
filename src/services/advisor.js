@@ -90,6 +90,7 @@ export function createAdvisor({ airData, ai = null, logger = silentLogger, cache
   return {
     getConditions: (coords) => airData.getConditions(coords),
     searchPlaces: (query) => airData.searchPlaces(query),
+    reversePlace: (point) => airData.reversePlace(point),
 
     /** Builds the full personalised plan for a validated profile. */
     async buildPlan(profile) {

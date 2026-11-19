@@ -52,6 +52,11 @@ async function backend(url, init = {}) {
   switch (pathname) {
     case '/api/health':
       return json(200, { status: 'ok', ai: false, model: null });
+    case '/api/reverse-geocode':
+      return json(200, {
+        place:
+          Number(searchParams.get('lat')) > 0 ? { name: 'New Delhi', region: 'Delhi, India', countryCode: 'IN' } : null,
+      });
     case '/api/geocode':
       return json(200, { places: await advisor.searchPlaces(searchParams.get('q')) });
     case '/api/plan':
@@ -211,6 +216,49 @@ describe('controller (main.js in jsdom)', () => {
     assert.equal($('area').getAttribute('aria-invalid'), 'true');
   });
 
+  it('shows upstream outages as a service problem with a retry button, not a form error', async () => {
+    failNext = {
+      status: 502,
+      body: { error: 'Live air quality data is unavailable right now. Please try again shortly.' },
+    };
+    $('profile-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await waitFor(() => assert.match($('form-errors').textContent, /Something went wrong on our side/));
+    assert.doesNotMatch($('form-errors').textContent, /Please fix/);
+    assert.equal(dom.window.document.querySelectorAll('[aria-invalid="true"]').length, 0);
+    const plansBefore = requests.filter((r) => r.path === '/api/plan').length;
+    $('form-errors').querySelector('button').click();
+    await waitFor(() => assert.equal(requests.filter((r) => r.path === '/api/plan').length, plansBefore + 1));
+    await waitFor(() => assert.equal($('results').hidden, false));
+    $('edit-btn').click();
+  });
+
+  it('accepts home size in square feet and sends square metres', async () => {
+    $('area').value = '90';
+    $('area-unit').value = 'sqft';
+    $('area-unit').dispatchEvent(new dom.window.Event('change'));
+    assert.equal($('area').value, '969', '90 m² shown as sq ft');
+    assert.equal($('area').min, '162');
+    assert.match($('area-hint').textContent, /162–10763 sq ft/);
+    $('area').value = '100';
+    $('profile-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await waitFor(() => assert.match($('form-errors').textContent, /between 162 and 10,763 sq ft/));
+    $('area').value = '1076';
+    $('profile-form').dispatchEvent(new dom.window.Event('submit', { cancelable: true }));
+    await waitFor(() => assert.equal($('results').hidden, false));
+    const sent = requests.filter((r) => r.path === '/api/plan').at(-1).body;
+    assert.equal(sent.home.areaSqm, 100, 'converted to m² for the API');
+    assert.equal(JSON.parse(dom.window.localStorage.getItem('airwise.session.v1')).areaUnit, 'sqft');
+    $('edit-btn').click();
+    $('area-unit').value = 'sqm';
+    $('area-unit').dispatchEvent(new dom.window.Event('change'));
+    assert.equal($('area').value, '100');
+    $('area').value = '';
+    $('area-unit').value = 'sqft';
+    $('area-unit').dispatchEvent(new dom.window.Event('change'));
+    assert.equal($('area').value, '', 'empty stays empty');
+    $('area').value = '1076';
+  });
+
   it('runs the demo family and refreshes air data', async () => {
     $('demo-btn').click();
     await waitFor(() => assert.match($('air-card').textContent, /New Delhi/));
@@ -223,19 +271,24 @@ describe('controller (main.js in jsdom)', () => {
 
 describe('controller: geolocation', () => {
   it('uses the device location when allowed and explains when denied', async () => {
-    let allow = true;
+    let allow = { latitude: 28.61394, longitude: 77.20902 };
     Object.defineProperty(dom.window.navigator, 'geolocation', {
       configurable: true,
       value: {
         getCurrentPosition(success, failure) {
-          if (allow) success({ coords: { latitude: 28.61394, longitude: 77.20902 } });
+          if (allow) success({ coords: allow });
           else failure(new Error('denied'));
         },
       },
     });
     $('edit-btn').click();
     $('place-locate').click();
-    assert.match($('place-selected').textContent, /Selected: My location, 28\.61, 77\.21/);
+    assert.match($('place-selected').textContent, /Selected: My location, 28\.61, 77\.21/, 'coordinates first');
+    await waitFor(() => assert.match($('place-selected').textContent, /Selected: New Delhi, Delhi, India/));
+    allow = { latitude: -33.9, longitude: 18.4 };
+    $('place-locate').click();
+    await tick(20);
+    assert.match($('place-selected').textContent, /My location, -33\.90, 18\.40/, 'keeps coordinates when unnamed');
     allow = false;
     $('place-locate').click();
     await waitFor(() => assert.match($('toast').textContent, /Could not get your location/));

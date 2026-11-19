@@ -9,11 +9,11 @@ cigarette equivalents, CO2) that **Google Gemini explains in plain language**.
 Built for PromptWars Challenge 6: Urban Air Quality Assistant.
 
 [![CI](../../actions/workflows/ci.yml/badge.svg)](../../actions/workflows/ci.yml)
-· 99 tests (incl. end-to-end controller tests) · 99.2% line / 91% branch coverage · 0 TypeScript errors · 0 axe-core WCAG 2.2 AA violations (jsdom + real Chrome, light and dark, colour contrast included) · 0 npm audit vulnerabilities
+· 104 tests (incl. end-to-end controller tests) · 99.2% line / 92% branch coverage · 0 TypeScript errors · 0 axe-core WCAG 2.2 AA violations (jsdom + real Chrome, light and dark, colour contrast included) · 0 npm audit vulnerabilities
 
 | Challenge requirement                                        | How AirWise delivers it                                                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Context-aware hyper-personalisation**                      | City search or "use my location" pulls **live AQI, PM2.5, PM10, NO2, wind, temperature and a 24-hour hourly forecast** (Open-Meteo / CAMS). The household profile covers adults, children, older adults, asthma/heart conditions, pregnancy, commute mode and distance, home size, ventilation, cooking fuel, heating, purifiers, incense, smoking, exercise habits, budget and free-text notes.                                                                                              |
+| **Context-aware hyper-personalisation**                      | City search or **"use my location"** (named automatically, e.g. "Pune, Maharashtra, India") pulls **live AQI, PM2.5, PM10, NO2, wind, temperature and a 24-hour hourly forecast** (Open-Meteo / CAMS). The household profile covers adults, children, older adults, asthma/heart conditions, pregnancy, commute mode and distance, home size (**m² or sq ft**), ventilation, cooking fuel, heating, purifiers, incense, smoking, exercise habits, budget and free-text notes.                 |
 | **Low-emission daily routines**                              | The cleanest and worst **2-hour daytime windows** come from the hourly forecast, so you know when to move workouts, errands, outdoor play and window-airing. Also covers carpooling, switching off when idling, and cutting standby power.                                                                                                                                                                                                                                                    |
 | **Indoor air quality hacks (budget-tiered)**                 | Grouped **Free → Low cost → Medium → Investment**: wet mopping, pausing incense, capturing kitchen smoke, sealing drafts, a DIY box-fan + MERV-13 cleaner, a sized HEPA purifier, smart purifier scheduling and filtered fresh air. It also busts the "plants clean the air" myth.                                                                                                                                                                                                            |
 | **Sustainable alternatives**                                 | Metro, bus or cycling vs. car; EV; induction vs. gas or biomass; wood or kerosene → LPG; angithi → electric heating; "heat people, not rooms"; swapping aerosol sprays for simple cleaners.                                                                                                                                                                                                                                                                                                   |
@@ -46,7 +46,7 @@ flowchart LR
   UI[Browser<br/>vanilla ES modules] -- POST /api/plan --> API
   UI -- POST /api/chat --> API
   UI -- POST /api/simulate<br/>(what-if) --> API
-  UI -- GET /api/geocode --> API
+  UI -- GET /api/geocode<br/>/api/reverse-geocode --> API
   subgraph Server [Node.js / Express 5]
     API[Routes<br/>Zod validation<br/>rate limit + Helmet CSP] --> ADV[Advisor]
     ADV --> AIR[Air data client<br/>+ TTL cache]
@@ -57,6 +57,7 @@ flowchart LR
     ADV --> F[Template fallback]
   end
   AIR --> OM[(Open-Meteo<br/>air quality + weather + geocoding)]
+  AIR --> OSM[(OpenStreetMap Nominatim<br/>names 'use my location')]
   G --> Gemini[(Google Gemini API)]
 ```
 
@@ -84,7 +85,8 @@ unreliable with numbers. So:
    maths on cached air data (no AI call, about 5 ms), so the impact card updates as they click.
 7. **Graceful degradation**: an overloaded or slow primary model fails over to `GEMINI_FALLBACK_MODEL`. Each attempt
    gets half the time budget, so one hung call can't use up the deadline. With no key or no usable output, each part
-   falls back to template text built from the same numbers. Upstream air-data outages return a friendly 502, never a
+   falls back to template text built from the same numbers. Upstream calls retry a brief blip once, and a weather
+   outage only removes wind and temperature. A real air-data outage returns a friendly 502, never a
    stack trace.
 
 ### Project structure
@@ -96,9 +98,9 @@ src/
   config.js                  Env parsing with safe defaults
   constants.js               Emission factors, ventilation, sources, breathing rates
   validation.js              Zod schemas for profile, chat, query strings
-  routes/api.js              /health, /geocode, /air, /plan, /chat
+  routes/api.js              /health, /geocode, /reverse-geocode, /air, /plan, /simulate, /chat
   services/
-    airData.js               Open-Meteo client + normalisation
+    airData.js               Open-Meteo + Nominatim client, retry, coalescing, normalisation
     aqi.js                   EPA PM2.5 → AQI, bands, kid messages
     windows.js               Cleanest / worst daytime windows
     exposure.js              Indoor mass balance, personal exposure, dose, CO2
@@ -146,7 +148,7 @@ only the wording is generic.
 npm run check   # lint + format + typecheck + tests with coverage gates + npm audit
 ```
 
-- **Testing**: 99 tests in 8 suites:
+- **Testing**: 104 tests in 8 suites:
   - **Model**: exposure physics (mass balance, purifier zones, the condition under which sealing helps), AQI
     breakpoints, forecast windows, action rules and budget filters.
   - **Advisor**: AI merge, partial and total AI failure, the what-if simulator, WHO/AQLI framing, emergency mode,
@@ -155,9 +157,9 @@ npm run check   # lint + format + typecheck + tests with coverage gates + npm au
   - **Gemini client**: retries, fallback model, timeouts.
   - **UI**: rendering, XSS, `lang` attributes, toggles and keyboard tabs in jsdom.
   - **End-to-end controller tests**: the real `index.html` and `main.js` run in jsdom against the real advisor,
-    covering search, geolocation, plan, what-if, checklist, print, copy, chat, errors and session restore.
+    covering search, geolocation with place naming, m²/sq ft conversion, outage retry, plan, what-if, checklist, print, copy, chat, errors and session restore.
 
-  Coverage gates are 95% lines, 85% branches and 95% functions; current figures are 99.2%, 91% and 98%.
+  Coverage gates are 95% lines, 85% branches and 95% functions; current figures are 99.2%, 92% and 98%.
 
 - **Accessibility**: axe-core audits the form and every rendered panel against WCAG 2.2 AA in the test suite. They
   were also audited in real Chrome in light and dark themes with colour contrast enabled, with 0 violations. The page

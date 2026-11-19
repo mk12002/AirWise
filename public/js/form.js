@@ -26,6 +26,43 @@ export const DEMO_PROFILE = Object.freeze({
   },
 });
 
+/** Square feet per square metre. The API always works in m²; sq ft is a display unit. */
+export const SQFT_PER_SQM = 10.7639;
+const AREA_UNITS = Object.freeze({
+  sqm: { min: 15, max: 1000, label: 'm²' },
+  sqft: { min: 162, max: 10763, label: 'sq ft' },
+});
+
+/** The unit the area value is currently written in (tracked on the input, so a unit change can convert). */
+const areaUnitOf = (form) =>
+  /** @type {HTMLInputElement} */ (form.elements.namedItem('areaSqm')).dataset.unit === 'sqft' ? 'sqft' : 'sqm';
+
+/** Floor area in m², whichever unit the family typed it in. */
+function areaSqm(form) {
+  const value = num(form, 'areaSqm');
+  if (areaUnitOf(form) === 'sqm') return value;
+  return Math.min(1000, Math.max(15, Math.round((value / SQFT_PER_SQM) * 10) / 10));
+}
+
+/**
+ * Switches the home-size unit, converting the typed value and the allowed range.
+ * @param {HTMLFormElement} form
+ * @param {'sqm' | 'sqft'} unit
+ */
+export function setAreaUnit(form, unit) {
+  const select = /** @type {HTMLSelectElement} */ (form.elements.namedItem('areaUnit'));
+  const input = /** @type {HTMLInputElement} */ (form.elements.namedItem('areaSqm'));
+  const next = unit === 'sqft' ? 'sqft' : 'sqm';
+  const sqm = input.value.trim() === '' ? null : areaSqm(form);
+  select.value = next;
+  input.dataset.unit = next;
+  const { min, max, label } = AREA_UNITS[next];
+  Object.assign(input, { min: String(min), max: String(max) });
+  if (sqm !== null) input.value = String(Math.round(next === 'sqft' ? sqm * SQFT_PER_SQM : sqm));
+  const hint = form.querySelector('#area-hint');
+  if (hint) hint.textContent = `${min}–${max} ${label}`;
+}
+
 const num = (form, name) => Number(/** @type {HTMLInputElement} */ (form.elements.namedItem(name)).value);
 const str = (form, name) => /** @type {HTMLInputElement} */ (form.elements.namedItem(name)).value;
 const bool = (form, name) => /** @type {HTMLInputElement} */ (form.elements.namedItem(name)).checked;
@@ -52,7 +89,7 @@ export function readProfile(form, location) {
       daysPerWeek: num(form, 'daysPerWeek'),
     },
     home: {
-      areaSqm: num(form, 'areaSqm'),
+      areaSqm: areaSqm(form),
       ventilation: str(form, 'ventilation'),
       cookingFuel: str(form, 'cookingFuel'),
       heating: str(form, 'heating'),
@@ -81,6 +118,8 @@ const FIELDS = {
   'home.purifierCadr': ['cadr', 'CADR must be between 50 and 1000 m³/h'],
 };
 
+const AREA_SQFT_MESSAGE = 'Home size must be between 162 and 10,763 sq ft';
+
 /**
  * Returns `{field, message}` problems found before sending.
  * @param {HTMLFormElement} form
@@ -95,7 +134,9 @@ export function validateForm(form, location) {
     if (id === 'cadr' && /** @type {HTMLElement} */ (form.querySelector('#cadr-field')).hidden) continue;
     const value = Number(input.value);
     const outOfRange = value < Number(input.min) || value > Number(input.max);
-    if (input.value.trim() === '' || !Number.isFinite(value) || outOfRange) problems.push({ id, message });
+    if (input.value.trim() === '' || !Number.isFinite(value) || outOfRange) {
+      problems.push({ id, message: id === 'area' && areaUnitOf(form) === 'sqft' ? AREA_SQFT_MESSAGE : message });
+    }
   }
   return problems;
 }
@@ -127,6 +168,10 @@ export function fillForm(form, profile) {
   set('distanceKm', commute.distanceKm);
   set('daysPerWeek', commute.daysPerWeek);
   set('areaSqm', home.areaSqm);
+  // Re-show the m² value in whichever unit the family prefers.
+  const unit = areaUnitOf(form);
+  /** @type {HTMLInputElement} */ (form.elements.namedItem('areaSqm')).dataset.unit = 'sqm';
+  setAreaUnit(form, unit);
   set('ventilation', home.ventilation);
   set('cookingFuel', home.cookingFuel);
   set('heating', home.heating);

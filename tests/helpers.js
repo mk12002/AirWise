@@ -71,7 +71,9 @@ export function fakeFetch(payloads = openMeteoPayloads(), { status = 200 } = {})
   const impl = async (url) => {
     calls.push(String(url));
     const host = new URL(url).host;
-    const body = { air: payloads.air, geocoding: payloads.geo }[host.split(/[-.]/)[0]] ?? payloads.weather;
+    const body =
+      { air: payloads.air, geocoding: payloads.geo, nominatim: payloads.rev }[host.split(/[-.]/)[0]] ??
+      payloads.weather;
     return { ok: status < 400, status, json: async () => structuredClone(body) };
   };
   return Object.assign(impl, { calls });

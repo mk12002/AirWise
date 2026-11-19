@@ -9,7 +9,9 @@ language for the specific family.
 
 - **Source:** [Open-Meteo Air Quality API](https://open-meteo.com/en/docs/air-quality-api) (Copernicus CAMS
   forecasts, roughly 11 km grid, hourly), plus Open-Meteo weather for wind, temperature and humidity. Both are free
-  and need no API key.
+  and need no API key. If the weather feed is briefly down, the plan still builds without wind and temperature.
+- **Home size** can be entered in m² or sq ft; the browser converts sq ft to m² (÷ 10.7639) before sending, so the
+  model always works in metric.
 - **Outdoor exposure** uses the mean PM2.5 over the next 24 forecast hours.
 - **Best and worst windows** are the cleanest and dirtiest contiguous 2-hour blocks between 06:00 and 21:00 local
   time ([`windows.js`](../src/services/windows.js)).

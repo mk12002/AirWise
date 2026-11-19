@@ -939,3 +939,19 @@ summary {
     display: block !important;
   }
 }
+
+/* Number input with a unit picker (home size in m² or sq ft). */
+.input-unit {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.input-unit input {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.input-unit select {
+  flex: 0 0 auto;
+  width: auto;
+}

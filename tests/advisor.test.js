@@ -60,7 +60,10 @@ describe('air data client', () => {
     const results = await Promise.all([1, 2, 3].map(() => client.getConditions({ lat: 10, lon: 20 })));
     assert.equal(fetchImpl.calls.length, 2, 'one air + one weather request');
     assert.equal(results[0], results[2]);
-    const failing = createAirDataClient({ fetchImpl: fakeFetch(openMeteoPayloads(), { status: 500 }) });
+    const failing = createAirDataClient({
+      fetchImpl: fakeFetch(openMeteoPayloads(), { status: 500 }),
+      retryDelayMs: 0,
+    });
     await assert.rejects(
       Promise.all([failing.getConditions({ lat: 1, lon: 1 }), failing.getConditions({ lat: 1, lon: 1 })]),
     );
@@ -72,10 +75,26 @@ describe('air data client', () => {
       fetchImpl: async () => {
         throw new TypeError('fetch failed');
       },
+      retryDelayMs: 0,
     });
     await assert.rejects(offline.getConditions({ lat: 1, lon: 1 }), UpstreamError);
-    const broken = createAirDataClient({ fetchImpl: fakeFetch(openMeteoPayloads(), { status: 503 }) });
+    const broken = createAirDataClient({ fetchImpl: fakeFetch(openMeteoPayloads(), { status: 503 }), retryDelayMs: 0 });
     await assert.rejects(broken.getConditions({ lat: 1, lon: 1 }), /returned 503/);
+  });
+
+  it('retries a brief upstream blip once and tolerates a weather outage', async () => {
+    const real = fakeFetch();
+    let airFailures = 1;
+    const flaky = async (url, init) => {
+      if (String(url).includes('api.open-meteo.com/v1/forecast')) throw new TypeError('socket reset');
+      if (String(url).includes('air-quality') && airFailures-- > 0) throw new TypeError('socket reset');
+      return real(url, init);
+    };
+    const client = createAirDataClient({ fetchImpl: flaky, retryDelayMs: 0 });
+    const conditions = await client.getConditions({ lat: 1, lon: 1 });
+    assert.equal(conditions.current.pm25, 80, 'air data arrives after one retry');
+    assert.equal(conditions.current.windKmh, null, 'weather is optional');
+    assert.equal(conditions.hourly[0].windKmh, null);
   });
 
   it('searches places and drops malformed results', async () => {
@@ -112,6 +131,49 @@ describe('air data client', () => {
     assert.match(fetchImpl.calls[0], /name=Lahore/);
     const empty = createAirDataClient({ fetchImpl: fakeFetch({ geo: {} }) });
     assert.deepEqual(await empty.searchPlaces('zzz'), []);
+  });
+
+  it('names a device location at city level, rounded, throttled and never throwing', async () => {
+    let clock = 0;
+    const rev = {
+      address: { city: 'Gurugram', state_district: 'Gurgaon', state: 'Haryana', country: 'India', country_code: 'in' },
+    };
+    const fetchImpl = fakeFetch({ rev });
+    const waits = [];
+    const sleep = async (ms) => {
+      waits.push(ms);
+    };
+    const client = createAirDataClient({ fetchImpl, cache: new TtlCache(), now: () => clock, sleep });
+    const [place, shared] = await Promise.all([
+      client.reversePlace({ lat: 28.45951, lon: 77.02638 }),
+      client.reversePlace({ lat: 28.45951, lon: 77.02638 }),
+    ]);
+    assert.deepEqual(place, { name: 'Gurugram', region: 'Haryana, India', countryCode: 'IN' });
+    assert.deepEqual(shared, place, 'concurrent lookups share one call');
+    assert.equal(fetchImpl.calls.length, 1);
+    assert.match(fetchImpl.calls[0], /lat=28\.46&lon=77\.03&zoom=10/, 'only ~1 km precision leaves the server');
+    await client.reversePlace({ lat: 1, lon: 1 });
+    await client.reversePlace({ lat: 2, lon: 2 });
+    assert.deepEqual(waits, [1000, 2000], 'queued to one call per second');
+    assert.equal(await client.reversePlace({ lat: 3, lon: 3 }), null, 'gives up rather than queueing too long');
+    clock = 9000;
+    assert.deepEqual(await client.reversePlace({ lat: 28.46, lon: 77.03 }), place, 'served from cache');
+    assert.equal(fetchImpl.calls.length, 3);
+
+    const village = createAirDataClient({
+      fetchImpl: fakeFetch({ rev: { address: { village: 'Ralegan', country: 'India', country_code: 'xx1' } } }),
+    });
+    assert.deepEqual(await village.reversePlace({ lat: 19, lon: 74 }), {
+      name: 'Ralegan',
+      region: 'India',
+      countryCode: undefined,
+    });
+    for (const body of [{}, { address: { country: 'India' } }, { address: 'x' }]) {
+      const unnamed = createAirDataClient({ fetchImpl: fakeFetch({ rev: body }) });
+      assert.equal(await unnamed.reversePlace({ lat: 0, lon: 0 }), null);
+    }
+    const down = createAirDataClient({ fetchImpl: fakeFetch({ rev }, { status: 503 }) });
+    assert.equal(await down.reversePlace({ lat: 0, lon: 0 }), null);
   });
 });
 
@@ -228,6 +290,7 @@ describe('advisor', () => {
   it('exposes place search and raw conditions', async () => {
     const advisor = createAdvisor({ airData: createAirDataClient({ fetchImpl: fakeFetch({ geo: { results: [] } }) }) });
     assert.deepEqual(await advisor.searchPlaces('x'), []);
+    assert.equal(await advisor.reversePlace({ lat: 1, lon: 2 }), null);
     const ok = createAdvisor({ airData: airData() });
     assert.equal((await ok.getConditions({ lat: 1, lon: 2 })).hourly.length, 24);
   });

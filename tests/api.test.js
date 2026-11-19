@@ -117,6 +117,17 @@ describe('API', () => {
     assert.deepEqual(res.body, { places: [] });
   });
 
+  it('GET /api/reverse-geocode validates coordinates and names the place', async () => {
+    const app = buildApp({
+      fetchImpl: fakeFetch({ rev: { address: { town: 'Shimla', state: 'Himachal Pradesh', country: 'India' } } }),
+    });
+    await request(app).get('/api/reverse-geocode?lat=91&lon=0').expect(400);
+    await request(app).get('/api/reverse-geocode?lat=1').expect(400);
+    const res = await request(app).get('/api/reverse-geocode?lat=31.1&lon=77.17').expect(200);
+    assert.equal(res.body.place.name, 'Shimla');
+    assert.equal(res.body.place.region, 'Himachal Pradesh, India');
+  });
+
   it('GET /api/air returns conditions for valid coordinates', async () => {
     const app = buildApp();
     const res = await request(app).get('/api/air?lat=28.6&lon=77.2').expect(200);

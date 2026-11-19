@@ -3,6 +3,13 @@ import { aqiBand, pm25ToAqi } from './aqi.js';
 const AIR_URL = 'https://air-quality-api.open-meteo.com/v1/air-quality';
 const WEATHER_URL = 'https://api.open-meteo.com/v1/forecast';
 const GEOCODE_URL = 'https://geocoding-api.open-meteo.com/v1/search';
+/** OpenStreetMap Nominatim, used only to name a device location (Open-Meteo has no reverse geocoding). */
+const REVERSE_URL = 'https://nominatim.openstreetmap.org/reverse';
+/** Nominatim's usage policy allows at most one request per second. */
+const REVERSE_MIN_INTERVAL_MS = 1000;
+/** Lookups that would have to queue this long or longer give up (the UI then shows coordinates). */
+const REVERSE_MAX_WAIT_MS = 3000;
+const REVERSE_USER_AGENT = 'clean-air-assistant/1.0 (open-source demo)';
 
 /** Hours of forecast kept for charts and timing (next 24 h from now). */
 export const FORECAST_HOURS = 24;
@@ -21,11 +28,22 @@ export class UpstreamError extends Error {
  * Client for Open-Meteo's free, key-less air quality, weather and geocoding
  * APIs (CAMS model data). `fetchImpl` is injectable so tests never hit the
  * network; results are cached per ~1 km grid cell.
+ * `now` is injectable for testing the reverse-geocoding throttle.
  *
  * @param {{fetchImpl?: typeof fetch, timeoutMs?: number,
- *          cache?: {get: (k: string) => any, set: (k: string, v: any) => void}}} [options]
+ *          cache?: {get: (k: string) => any, set: (k: string, v: any) => void}, now?: () => number,
+ *          retryDelayMs?: number, sleep?: (ms: number) => Promise<void>}} [options]
  */
-export function createAirDataClient({ fetchImpl = fetch, timeoutMs = 8000, cache } = {}) {
+export function createAirDataClient({
+  fetchImpl = fetch,
+  timeoutMs = 8000,
+  cache,
+  now = Date.now,
+  retryDelayMs = 400,
+  sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+} = {}) {
+  /** Next time slot a reverse lookup may use (queues requests to one per second). */
+  let nextReverseAt = -Infinity;
   /** In-flight requests by cache key: concurrent identical lookups share one upstream call. */
   const inflight = new Map();
 
@@ -45,12 +63,22 @@ export function createAirDataClient({ fetchImpl = fetch, timeoutMs = 8000, cache
     return inflight.get(key);
   }
 
-  async function getJson(url) {
+  /** One retry after a short pause smooths over brief upstream blips (resets, 5xx). */
+  async function getJsonWithRetry(url) {
+    try {
+      return await getJson(url);
+    } catch {
+      await sleep(retryDelayMs);
+      return getJson(url);
+    }
+  }
+
+  async function getJson(url, headers = {}) {
     let response;
     try {
       response = await fetchImpl(url, {
         signal: AbortSignal.timeout(timeoutMs),
-        headers: { accept: 'application/json' },
+        headers: { accept: 'application/json', ...headers },
       });
     } catch {
       throw new UpstreamError('Air quality service is unreachable');
@@ -67,13 +95,14 @@ export function createAirDataClient({ fetchImpl = fetch, timeoutMs = 8000, cache
     getConditions({ lat, lon }) {
       return cached(`air:${lat.toFixed(2)},${lon.toFixed(2)}`, async () => {
         const coords = `latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&timezone=auto&forecast_days=2`;
+        // Air quality is essential; weather only adds wind and temperature, so its outage is tolerated.
         const [air, weather] = await Promise.all([
-          getJson(
+          getJsonWithRetry(
             `${AIR_URL}?${coords}&current=pm2_5,pm10,us_aqi,nitrogen_dioxide,ozone,carbon_monoxide&hourly=pm2_5,us_aqi`,
           ),
-          getJson(
+          getJsonWithRetry(
             `${WEATHER_URL}?${coords}&current=temperature_2m,relative_humidity_2m,wind_speed_10m&hourly=wind_speed_10m`,
-          ),
+          ).catch(() => null),
         ]);
         return normaliseConditions(air, weather);
       });
@@ -85,7 +114,9 @@ export function createAirDataClient({ fetchImpl = fetch, timeoutMs = 8000, cache
      */
     searchPlaces(query) {
       return cached(`geo:${query.toLowerCase()}`, async () => {
-        const data = await getJson(`${GEOCODE_URL}?name=${encodeURIComponent(query)}&count=5&language=en&format=json`);
+        const data = await getJsonWithRetry(
+          `${GEOCODE_URL}?name=${encodeURIComponent(query)}&count=5&language=en&format=json`,
+        );
         const places = (Array.isArray(data?.results) ? data.results : []).map((place) => ({
           name: String(place.name ?? '').slice(0, 80),
           region: [place.admin1, place.country].filter(Boolean).join(', ').slice(0, 120),
@@ -96,6 +127,57 @@ export function createAirDataClient({ fetchImpl = fetch, timeoutMs = 8000, cache
         return places.filter((p) => p.name && Number.isFinite(p.lat) && Number.isFinite(p.lon));
       });
     },
+
+    /**
+     * Names a coordinate at city level ("Gurugram, Haryana, India"). Coordinates are
+     * rounded to ~1 km before leaving the server. Returns null (never throws) when the
+     * place can't be named, so callers can fall back to showing coordinates.
+     * @param {{lat: number, lon: number}} point
+     */
+    async reversePlace({ lat, lon }) {
+      const key = `rev:${lat.toFixed(2)},${lon.toFixed(2)}`;
+      const shared = cache?.get(key) || inflight.has(key);
+      const wait = shared ? 0 : Math.max(0, nextReverseAt - now());
+      if (wait >= REVERSE_MAX_WAIT_MS) return null;
+      try {
+        return await cached(key, async () => {
+          nextReverseAt = now() + wait + REVERSE_MIN_INTERVAL_MS;
+          if (wait > 0) await sleep(wait);
+          const data = await getJson(
+            `${REVERSE_URL}?format=jsonv2&lat=${lat.toFixed(2)}&lon=${lon.toFixed(2)}&zoom=10&accept-language=en`,
+            { 'user-agent': REVERSE_USER_AGENT },
+          );
+          const place = placeFromAddress(data?.address);
+          if (!place) throw new UpstreamError('Location could not be named');
+          return place;
+        });
+      } catch {
+        return null;
+      }
+    },
+  };
+}
+
+/** City-level name and region from a Nominatim address, or null. */
+function placeFromAddress(address) {
+  if (!address || typeof address !== 'object') return null;
+  const name = [
+    address.city,
+    address.town,
+    address.village,
+    address.suburb,
+    address.county,
+    address.state_district,
+  ].find((part) => typeof part === 'string' && part.trim());
+  if (!name) return null;
+  const code = String(address.country_code ?? '').toUpperCase();
+  return {
+    name: name.trim().slice(0, 80),
+    region: [address.state, address.country]
+      .filter((part) => typeof part === 'string' && part && part !== name)
+      .join(', ')
+      .slice(0, 120),
+    countryCode: /^[A-Z]{2}$/.test(code) ? code : undefined,
   };
 }
 

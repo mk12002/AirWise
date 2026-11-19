@@ -92,7 +92,7 @@ export function createApp({ advisor, config, logger = createLogger() }) {
     legacyHeaders: false,
     message: { error: 'Too many requests. Please wait a minute and try again.' },
   });
-  app.use(['/api/plan', '/api/chat', '/api/geocode', '/api/air'], apiLimiter);
+  app.use(['/api/plan', '/api/chat', '/api/geocode', '/api/reverse-geocode', '/api/air'], apiLimiter);
   app.use('/api/simulate', simulateLimiter);
   app.use(
     '/api',

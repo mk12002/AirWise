@@ -173,17 +173,26 @@
             <legend><span class="step" aria-hidden="true">4</span> Your home</legend>
             <div class="grid-3">
               <div class="field">
-                <label for="area">Home size (m²)</label>
-                <input
-                  id="area"
-                  name="areaSqm"
-                  type="number"
-                  inputmode="numeric"
-                  min="15"
-                  max="1000"
-                  value="80"
-                  required
-                />
+                <label for="area">Home size</label>
+                <div class="input-unit">
+                  <input
+                    id="area"
+                    name="areaSqm"
+                    type="number"
+                    inputmode="numeric"
+                    min="15"
+                    max="1000"
+                    value="80"
+                    aria-describedby="area-hint"
+                    required
+                  />
+                  <label for="area-unit" class="visually-hidden">Home size unit</label>
+                  <select id="area-unit" name="areaUnit">
+                    <option value="sqm">m²</option>
+                    <option value="sqft">sq ft</option>
+                  </select>
+                </div>
+                <p id="area-hint" class="hint">15–1000 m²</p>
               </div>
               <div class="field">
                 <label for="ventilation">Ventilation</label>
